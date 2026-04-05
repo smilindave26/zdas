@@ -1,0 +1,219 @@
+package zdas
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const minimalYAML = `
+external_url: "https://das.example.com"
+controller:
+  api_url: "https://controller.example.com:1280"
+`
+
+func writeTempConfig(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	return path
+}
+
+func TestLoadConfigDefaults(t *testing.T) {
+	path := writeTempConfig(t, minimalYAML)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	if cfg.Listen != ":18443" {
+		t.Errorf("Listen default = %q, want :18443", cfg.Listen)
+	}
+	if cfg.TLS.Mode != TLSModeNone {
+		t.Errorf("TLS.Mode default = %q, want none", cfg.TLS.Mode)
+	}
+	if cfg.Controller.PollInterval != 5*time.Minute {
+		t.Errorf("Controller.PollInterval default = %v, want 5m", cfg.Controller.PollInterval)
+	}
+	if cfg.Controller.SelfIssuer != cfg.ExternalURL {
+		t.Errorf("Controller.SelfIssuer should default to ExternalURL, got %q", cfg.Controller.SelfIssuer)
+	}
+	if cfg.Claims.UsernameClaim != "preferred_username" {
+		t.Errorf("Claims.UsernameClaim default = %q", cfg.Claims.UsernameClaim)
+	}
+	if cfg.Claims.NameTemplate != "{username}-{device_name}" {
+		t.Errorf("Claims.NameTemplate default = %q", cfg.Claims.NameTemplate)
+	}
+	if cfg.Claims.IdentityNameClaim != "device_identity_name" {
+		t.Errorf("Claims.IdentityNameClaim default = %q", cfg.Claims.IdentityNameClaim)
+	}
+	if cfg.Claims.ExternalIDClaim != "device_external_id" {
+		t.Errorf("Claims.ExternalIDClaim default = %q", cfg.Claims.ExternalIDClaim)
+	}
+	if cfg.Token.Issuer != cfg.ExternalURL {
+		t.Errorf("Token.Issuer should default to ExternalURL, got %q", cfg.Token.Issuer)
+	}
+	if cfg.Token.Audience != "ziti-enrolltocert" {
+		t.Errorf("Token.Audience default = %q", cfg.Token.Audience)
+	}
+	if cfg.Token.Expiry != 5*time.Minute {
+		t.Errorf("Token.Expiry default = %v", cfg.Token.Expiry)
+	}
+	if cfg.Session.Timeout != 10*time.Minute {
+		t.Errorf("Session.Timeout default = %v", cfg.Session.Timeout)
+	}
+	if cfg.Session.CodeExpiry != 60*time.Second {
+		t.Errorf("Session.CodeExpiry default = %v", cfg.Session.CodeExpiry)
+	}
+}
+
+func TestLoadConfigEnvOverrides(t *testing.T) {
+	path := writeTempConfig(t, minimalYAML)
+	t.Setenv("ZDAS_LISTEN", ":9999")
+	t.Setenv("ZDAS_CONTROLLER_POLL_INTERVAL", "30s")
+	t.Setenv("ZDAS_TOKEN_AUDIENCE", "custom-audience")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Listen != ":9999" {
+		t.Errorf("Listen env override = %q", cfg.Listen)
+	}
+	if cfg.Controller.PollInterval != 30*time.Second {
+		t.Errorf("PollInterval env override = %v", cfg.Controller.PollInterval)
+	}
+	if cfg.Token.Audience != "custom-audience" {
+		t.Errorf("Token.Audience env override = %q", cfg.Token.Audience)
+	}
+}
+
+func TestLoadConfigProviderSecretEnvOverride(t *testing.T) {
+	yaml := minimalYAML + `
+providers:
+  - type: github
+    name: gh-prod
+    client_id: "placeholder"
+    client_secret: "placeholder"
+`
+	path := writeTempConfig(t, yaml)
+	t.Setenv("ZDAS_PROVIDER_GH_PROD_CLIENT_SECRET", "real-secret")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("providers: %d", len(cfg.Providers))
+	}
+	if cfg.Providers[0].ClientSecret != "real-secret" {
+		t.Errorf("ClientSecret env override = %q", cfg.Providers[0].ClientSecret)
+	}
+	if cfg.Providers[0].UsernameField != "login" {
+		t.Errorf("github UsernameField default = %q", cfg.Providers[0].UsernameField)
+	}
+	if cfg.Providers[0].UserIDField != "id" {
+		t.Errorf("github UserIDField default = %q", cfg.Providers[0].UserIDField)
+	}
+}
+
+func TestValidateRequiresExternalURL(t *testing.T) {
+	cfg := &Config{Controller: ControllerConfig{APIURL: "https://c"}}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "external_url") {
+		t.Errorf("expected external_url error, got %v", err)
+	}
+}
+
+func TestValidateRequiresControllerAPIURL(t *testing.T) {
+	cfg := &Config{ExternalURL: "https://das.example.com"}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "controller.api_url") {
+		t.Errorf("expected controller.api_url error, got %v", err)
+	}
+}
+
+func TestValidateTLSStaticRequiresFiles(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		TLS:         TLSConfig{Mode: TLSModeStatic},
+		Controller:  ControllerConfig{APIURL: "https://c"},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "cert_file") {
+		t.Errorf("expected static TLS file error, got %v", err)
+	}
+}
+
+func TestValidateTLSACMERequiresDomains(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		TLS:         TLSConfig{Mode: TLSModeACME, ACME: ACMEConfig{CacheDir: "/tmp"}},
+		Controller:  ControllerConfig{APIURL: "https://c"},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "domain") {
+		t.Errorf("expected acme domains error, got %v", err)
+	}
+}
+
+func TestValidateRejectsDuplicateProviderNames(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Providers: []ProviderConfig{
+			{Type: "github", Name: "dup", ClientID: "a", ClientSecret: "b"},
+			{Type: "github", Name: "dup", ClientID: "c", ClientSecret: "d"},
+		},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("expected duplicate provider name error, got %v", err)
+	}
+}
+
+func TestValidateGithubRequiresSecret(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Providers: []ProviderConfig{
+			{Type: "github", Name: "gh", ClientID: "abc"},
+		},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "client_secret") {
+		t.Errorf("expected github client_secret error, got %v", err)
+	}
+}
+
+func TestValidateNameTemplateMustContainPlaceholders(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Claims:      ClaimsConfig{NameTemplate: "{username}-only"},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "device_name") {
+		t.Errorf("expected name_template placeholder error, got %v", err)
+	}
+}
+
+func TestEnvProviderKey(t *testing.T) {
+	cases := map[string]string{
+		"github":        "GITHUB",
+		"gh-prod":       "GH_PROD",
+		"Keycloak v2":   "KEYCLOAK_V2",
+		"foo.bar":       "FOO_BAR",
+		"already_upper": "ALREADY_UPPER",
+	}
+	for in, want := range cases {
+		if got := envProviderKey(in); got != want {
+			t.Errorf("envProviderKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

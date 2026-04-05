@@ -1,0 +1,310 @@
+package zdas
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// TLS modes.
+const (
+	TLSModeNone   = "none"
+	TLSModeStatic = "static"
+	TLSModeACME   = "acme"
+)
+
+// Provider types.
+const (
+	ProviderTypeGitHub = "github"
+)
+
+// Config is the top-level ZDAS configuration.
+type Config struct {
+	Listen      string           `yaml:"listen"`
+	ExternalURL string           `yaml:"external_url"`
+	TLS         TLSConfig        `yaml:"tls"`
+	Controller  ControllerConfig `yaml:"controller"`
+	Providers   []ProviderConfig `yaml:"providers"`
+	Claims      ClaimsConfig     `yaml:"claims"`
+	Token       TokenConfig      `yaml:"token"`
+	Session     SessionConfig    `yaml:"session"`
+}
+
+// TLSConfig selects and configures the TLS serving mode.
+type TLSConfig struct {
+	Mode     string     `yaml:"mode"`
+	CertFile string     `yaml:"cert_file"`
+	KeyFile  string     `yaml:"key_file"`
+	ACME     ACMEConfig `yaml:"acme"`
+}
+
+// ACMEConfig configures autocert / Let's Encrypt.
+type ACMEConfig struct {
+	Domains  []string `yaml:"domains"`
+	CacheDir string   `yaml:"cache_dir"`
+}
+
+// ControllerConfig describes how ZDAS reaches the Ziti controller to discover
+// upstream ext-jwt-signers.
+type ControllerConfig struct {
+	APIURL       string        `yaml:"api_url"`
+	CAFile       string        `yaml:"ca_file"`
+	PollInterval time.Duration `yaml:"poll_interval"`
+	SelfIssuer   string        `yaml:"self_issuer"`
+}
+
+// ProviderConfig is the config for a non-OIDC upstream provider (e.g. GitHub).
+type ProviderConfig struct {
+	Type          string   `yaml:"type"`
+	Name          string   `yaml:"name"`
+	ClientID      string   `yaml:"client_id"`
+	ClientSecret  string   `yaml:"client_secret"`
+	UsernameField string   `yaml:"username_field"`
+	UserIDField   string   `yaml:"user_id_field"`
+	AllowedOrgs   []string `yaml:"allowed_orgs"`
+}
+
+// ClaimsConfig controls how the ZDAS JWT claims are composed.
+type ClaimsConfig struct {
+	UsernameClaim     string `yaml:"username_claim"`
+	NameTemplate      string `yaml:"name_template"`
+	IdentityNameClaim string `yaml:"identity_name_claim"`
+	ExternalIDClaim   string `yaml:"external_id_claim"`
+}
+
+// TokenConfig controls the ZDAS-issued token.
+type TokenConfig struct {
+	Issuer   string        `yaml:"issuer"`
+	Audience string        `yaml:"audience"`
+	Expiry   time.Duration `yaml:"expiry"`
+}
+
+// SessionConfig controls in-flight auth session and code lifetimes.
+type SessionConfig struct {
+	Timeout    time.Duration `yaml:"timeout"`
+	CodeExpiry time.Duration `yaml:"code_expiry"`
+}
+
+// LoadConfig reads a YAML config file (if path is non-empty), applies environment
+// variable overrides, fills in defaults, and validates the result.
+func LoadConfig(path string) (*Config, error) {
+	cfg := &Config{}
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read config file: %w", err)
+		}
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse config file: %w", err)
+		}
+	}
+	if err := cfg.applyEnv(); err != nil {
+		return nil, fmt.Errorf("apply env overrides: %w", err)
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// applyDefaults fills in any unset fields with sensible defaults. Called after
+// YAML parsing and env overrides so that explicit empty values from neither
+// source are replaced.
+func (c *Config) applyDefaults() {
+	if c.Listen == "" {
+		c.Listen = ":18443"
+	}
+	if c.TLS.Mode == "" {
+		c.TLS.Mode = TLSModeNone
+	}
+	if c.Controller.PollInterval == 0 {
+		c.Controller.PollInterval = 5 * time.Minute
+	}
+	if c.Controller.SelfIssuer == "" {
+		c.Controller.SelfIssuer = c.ExternalURL
+	}
+	if c.Claims.UsernameClaim == "" {
+		c.Claims.UsernameClaim = "preferred_username"
+	}
+	if c.Claims.NameTemplate == "" {
+		c.Claims.NameTemplate = "{username}-{device_name}"
+	}
+	if c.Claims.IdentityNameClaim == "" {
+		c.Claims.IdentityNameClaim = "device_identity_name"
+	}
+	if c.Claims.ExternalIDClaim == "" {
+		c.Claims.ExternalIDClaim = "device_external_id"
+	}
+	if c.Token.Issuer == "" {
+		c.Token.Issuer = c.ExternalURL
+	}
+	if c.Token.Audience == "" {
+		c.Token.Audience = "ziti-enrolltocert"
+	}
+	if c.Token.Expiry == 0 {
+		c.Token.Expiry = 5 * time.Minute
+	}
+	if c.Session.Timeout == 0 {
+		c.Session.Timeout = 10 * time.Minute
+	}
+	if c.Session.CodeExpiry == 0 {
+		c.Session.CodeExpiry = 60 * time.Second
+	}
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		if p.Type == ProviderTypeGitHub {
+			if p.UsernameField == "" {
+				p.UsernameField = "login"
+			}
+			if p.UserIDField == "" {
+				p.UserIDField = "id"
+			}
+		}
+	}
+}
+
+// Validate returns an error if the configuration is incomplete or inconsistent.
+func (c *Config) Validate() error {
+	if c.ExternalURL == "" {
+		return errors.New("external_url is required")
+	}
+	if !strings.HasPrefix(c.ExternalURL, "http://") && !strings.HasPrefix(c.ExternalURL, "https://") {
+		return errors.New("external_url must be an http(s) URL")
+	}
+	switch c.TLS.Mode {
+	case TLSModeNone:
+	case TLSModeStatic:
+		if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
+			return errors.New("tls.mode=static requires cert_file and key_file")
+		}
+	case TLSModeACME:
+		if len(c.TLS.ACME.Domains) == 0 {
+			return errors.New("tls.mode=acme requires at least one domain")
+		}
+		if c.TLS.ACME.CacheDir == "" {
+			return errors.New("tls.mode=acme requires cache_dir")
+		}
+	default:
+		return fmt.Errorf("tls.mode: unknown value %q (expected none|static|acme)", c.TLS.Mode)
+	}
+	if c.Controller.APIURL == "" {
+		return errors.New("controller.api_url is required")
+	}
+	names := make(map[string]struct{}, len(c.Providers))
+	for i, p := range c.Providers {
+		if p.Name == "" {
+			return fmt.Errorf("providers[%d]: name is required", i)
+		}
+		if _, dup := names[p.Name]; dup {
+			return fmt.Errorf("providers[%d]: duplicate name %q", i, p.Name)
+		}
+		names[p.Name] = struct{}{}
+		switch p.Type {
+		case ProviderTypeGitHub:
+			if p.ClientID == "" || p.ClientSecret == "" {
+				return fmt.Errorf("providers[%d] (%s): client_id and client_secret are required for github", i, p.Name)
+			}
+		case "":
+			return fmt.Errorf("providers[%d] (%s): type is required", i, p.Name)
+		default:
+			return fmt.Errorf("providers[%d] (%s): unknown type %q", i, p.Name, p.Type)
+		}
+	}
+	if c.Token.Audience == "" {
+		return errors.New("token.audience is required")
+	}
+	if !strings.Contains(c.Claims.NameTemplate, "{username}") || !strings.Contains(c.Claims.NameTemplate, "{device_name}") {
+		return errors.New("claims.name_template must contain both {username} and {device_name}")
+	}
+	return nil
+}
+
+// applyEnv overlays ZDAS_* environment variables onto the config. Only scalar
+// fields are supported. Provider secrets are overridable per-provider via
+// ZDAS_PROVIDER_<NAME>_CLIENT_ID and ZDAS_PROVIDER_<NAME>_CLIENT_SECRET where
+// <NAME> is the upper-cased provider name with non-alphanumeric characters
+// replaced by underscores.
+func (c *Config) applyEnv() error {
+	setString(&c.Listen, "ZDAS_LISTEN")
+	setString(&c.ExternalURL, "ZDAS_EXTERNAL_URL")
+
+	setString(&c.TLS.Mode, "ZDAS_TLS_MODE")
+	setString(&c.TLS.CertFile, "ZDAS_TLS_CERT_FILE")
+	setString(&c.TLS.KeyFile, "ZDAS_TLS_KEY_FILE")
+	setString(&c.TLS.ACME.CacheDir, "ZDAS_TLS_ACME_CACHE_DIR")
+
+	setString(&c.Controller.APIURL, "ZDAS_CONTROLLER_API_URL")
+	setString(&c.Controller.CAFile, "ZDAS_CONTROLLER_CA_FILE")
+	setString(&c.Controller.SelfIssuer, "ZDAS_CONTROLLER_SELF_ISSUER")
+	if err := setDuration(&c.Controller.PollInterval, "ZDAS_CONTROLLER_POLL_INTERVAL"); err != nil {
+		return err
+	}
+
+	setString(&c.Claims.UsernameClaim, "ZDAS_CLAIMS_USERNAME_CLAIM")
+	setString(&c.Claims.NameTemplate, "ZDAS_CLAIMS_NAME_TEMPLATE")
+	setString(&c.Claims.IdentityNameClaim, "ZDAS_CLAIMS_IDENTITY_NAME_CLAIM")
+	setString(&c.Claims.ExternalIDClaim, "ZDAS_CLAIMS_EXTERNAL_ID_CLAIM")
+
+	setString(&c.Token.Issuer, "ZDAS_TOKEN_ISSUER")
+	setString(&c.Token.Audience, "ZDAS_TOKEN_AUDIENCE")
+	if err := setDuration(&c.Token.Expiry, "ZDAS_TOKEN_EXPIRY"); err != nil {
+		return err
+	}
+
+	if err := setDuration(&c.Session.Timeout, "ZDAS_SESSION_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := setDuration(&c.Session.CodeExpiry, "ZDAS_SESSION_CODE_EXPIRY"); err != nil {
+		return err
+	}
+
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		key := envProviderKey(p.Name)
+		setString(&p.ClientID, "ZDAS_PROVIDER_"+key+"_CLIENT_ID")
+		setString(&p.ClientSecret, "ZDAS_PROVIDER_"+key+"_CLIENT_SECRET")
+	}
+	return nil
+}
+
+func setString(dst *string, key string) {
+	if v, ok := os.LookupEnv(key); ok {
+		*dst = v
+	}
+}
+
+func setDuration(dst *time.Duration, key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	*dst = d
+	return nil
+}
+
+// envProviderKey normalizes a provider name into the form used in env var names:
+// upper-case, with any non-alphanumeric character replaced by underscore.
+func envProviderKey(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - 'a' + 'A')
+		case (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
