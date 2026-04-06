@@ -2,14 +2,11 @@ package zdas
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -181,28 +178,16 @@ func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
 }
 
 // controllerClient builds an HTTP client for controller communication. If
-// identityFile is empty, it returns a plain client. If set, the CA bundle is
-// extracted from the identity JSON to verify the controller's TLS certificate.
-func controllerClient(identityFile string) (*http.Client, error) {
-	if identityFile == "" {
+// identityFilePath is empty, it returns a plain client. If set, the CA bundle
+// is extracted from the Ziti identity JSON to verify the controller's TLS
+// certificate (no client cert - this is for the public client API).
+func controllerClient(identityFilePath string) (*http.Client, error) {
+	if identityFilePath == "" {
 		return &http.Client{Timeout: 15 * time.Second}, nil
 	}
-	// TODO(commit3): Parse identity JSON and extract CA. For now, treat as PEM.
-	pemData, err := os.ReadFile(identityFile)
+	id, err := loadIdentityFile(identityFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("read identity file: %w", err)
+		return nil, err
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pemData) {
-		return nil, fmt.Errorf("no valid certs found in %s", identityFile)
-	}
-	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool},
-		},
-	}, nil
+	return discoveryClientFromIdentity(id), nil
 }
