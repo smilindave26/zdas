@@ -22,12 +22,25 @@ type DeviceInfo struct {
 	OSVersion  string // from os_version param
 }
 
-// ComposeClaims builds the full set of JWT claims for a ZDAS token from an
-// upstream identity and device info, according to the ClaimsConfig.
-func ComposeClaims(cfg ClaimsConfig, identity *UpstreamIdentity, info *DeviceInfo) map[string]interface{} {
+// ComposeClaims builds the full set of JWT claims for a ZDAS token. When info
+// is non-nil, it uses the primary path (device info from tunneler). When info
+// is nil and nonce is non-empty, it uses the fallback path (temporary name
+// with a nonce-based external ID).
+func ComposeClaims(cfg ClaimsConfig, fbCfg FallbackConfig, identity *UpstreamIdentity, info *DeviceInfo, nonce string) map[string]interface{} {
 	username := resolveUsername(cfg.UsernameClaim, identity)
-	identityName := expandTemplate(cfg.NameTemplate, username, info)
-	externalID := computeExternalID(identity.Issuer, identity.Subject, info.DeviceName)
+
+	var identityName, externalID, deviceName string
+	if info != nil {
+		// Primary path: device info available.
+		identityName = expandTemplate(cfg.NameTemplate, username, info)
+		externalID = computeExternalID(identity.Issuer, identity.Subject, info.DeviceName)
+		deviceName = info.DeviceName
+	} else {
+		// Fallback path: generate temp name and nonce-based external ID.
+		identityName = expandFallbackTemplate(fbCfg.TempNameTemplate, username, nonce)
+		externalID = computeExternalID(identity.Issuer, identity.Subject, nonce)
+		deviceName = ""
+	}
 
 	claims := map[string]interface{}{
 		cfg.IdentityNameClaim: identityName,
@@ -35,9 +48,17 @@ func ComposeClaims(cfg ClaimsConfig, identity *UpstreamIdentity, info *DeviceInf
 		"upstream_sub":        identity.Subject,
 		"upstream_iss":        identity.Issuer,
 		"preferred_username":  username,
-		"device_name":         info.DeviceName,
+		"device_name":         deviceName,
 	}
 	return claims
+}
+
+// expandFallbackTemplate replaces {username} and {nonce_short} in the fallback
+// name template.
+func expandFallbackTemplate(tmpl, username, nonce string) string {
+	s := strings.ReplaceAll(tmpl, "{username}", username)
+	s = strings.ReplaceAll(s, "{nonce_short}", nonce)
+	return s
 }
 
 // MintToken signs a ZDAS JWT with the given claims, token config, and key set.

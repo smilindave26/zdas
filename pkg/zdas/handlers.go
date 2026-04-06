@@ -250,13 +250,14 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := ComposeClaims(h.cfg.Claims, identity, sess.DeviceInfo)
+	claims := ComposeClaims(h.cfg.Claims, h.cfg.Fallback, identity, sess.DeviceInfo, sess.FallbackNonce)
 
 	ac := &AuthCode{
 		Claims:              claims,
 		RedirectURI:         sess.TunnelerRedirectURI,
 		CodeChallenge:       sess.TunnelerCodeChallenge,
 		CodeChallengeMethod: sess.TunnelerCodeChallengeMethod,
+		IsFallback:          sess.FallbackNonce != "",
 	}
 	zdasCode, err := h.store.CreateCode(ac)
 	if err != nil {

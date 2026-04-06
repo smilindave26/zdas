@@ -199,12 +199,12 @@ func TestTokenEndpointFullFlow(t *testing.T) {
 
 	verifier, challenge := generateTestPKCE(t)
 
-	claims := ComposeClaims(defaultClaimsConfig(), &UpstreamIdentity{
+	claims := ComposeClaims(defaultClaimsConfig(), FallbackConfig{}, &UpstreamIdentity{
 		Subject:  "user1",
 		Username: "alice",
 		Issuer:   "https://test-idp",
 		Raw:      map[string]interface{}{"preferred_username": "alice"},
-	}, &DeviceInfo{DeviceName: "macbook"})
+	}, &DeviceInfo{DeviceName: "macbook"}, "")
 
 	code, err := h.store.CreateCode(&AuthCode{
 		Claims:              claims,

@@ -25,7 +25,7 @@ func TestComposeClaimsBasic(t *testing.T) {
 		Raw:      map[string]interface{}{"preferred_username": "jsmith", "sub": "u42"},
 	}
 	info := &DeviceInfo{DeviceName: "macbook-pro", Hostname: "macbook-pro", OS: "darwin", Arch: "arm64"}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, info)
+	claims := ComposeClaims(defaultClaimsConfig(), FallbackConfig{}, identity, info, "")
 
 	if got := claims["device_identity_name"]; got != "jsmith-macbook-pro" {
 		t.Errorf("device_identity_name = %q", got)
@@ -51,7 +51,7 @@ func TestComposeClaimsUsernameFallback(t *testing.T) {
 		Issuer:   "https://idp",
 		Raw:      map[string]interface{}{},
 	}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, &DeviceInfo{DeviceName: "laptop"})
+	claims := ComposeClaims(defaultClaimsConfig(), FallbackConfig{}, identity, &DeviceInfo{DeviceName: "laptop"}, "")
 	if got := claims["device_identity_name"]; got != "fallback-user-laptop" {
 		t.Errorf("identity name with fallback = %q", got)
 	}
@@ -63,9 +63,52 @@ func TestComposeClaimsSubjectFallback(t *testing.T) {
 		Issuer:  "https://idp",
 		Raw:     map[string]interface{}{},
 	}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, &DeviceInfo{DeviceName: "phone"})
+	claims := ComposeClaims(defaultClaimsConfig(), FallbackConfig{}, identity, &DeviceInfo{DeviceName: "phone"}, "")
 	if got := claims["device_identity_name"]; got != "anon-sub-phone" {
 		t.Errorf("identity name with subject fallback = %q", got)
+	}
+}
+
+func TestComposeClaimsFallback(t *testing.T) {
+	identity := &UpstreamIdentity{
+		Subject:  "u42",
+		Username: "jsmith",
+		Issuer:   "https://keycloak",
+		Raw:      map[string]interface{}{"preferred_username": "jsmith"},
+	}
+	fbCfg := FallbackConfig{
+		Enabled:          true,
+		TempNameTemplate: "{username}-pending-{nonce_short}",
+	}
+	claims := ComposeClaims(defaultClaimsConfig(), fbCfg, identity, nil, "a3f9b2")
+
+	if got := claims["device_identity_name"]; got != "jsmith-pending-a3f9b2" {
+		t.Errorf("fallback identity name = %q", got)
+	}
+	if got, ok := claims["device_external_id"].(string); !ok || len(got) != 64 {
+		t.Errorf("fallback external_id = %q", got)
+	}
+	if got := claims["device_name"]; got != "" {
+		t.Errorf("fallback device_name should be empty, got %q", got)
+	}
+}
+
+func TestComposeClaimsFallbackUniqueExternalIDs(t *testing.T) {
+	identity := &UpstreamIdentity{Subject: "u1", Issuer: "https://idp"}
+	fbCfg := FallbackConfig{TempNameTemplate: "{username}-pending-{nonce_short}"}
+
+	c1 := ComposeClaims(defaultClaimsConfig(), fbCfg, identity, nil, "aaaaaa")
+	c2 := ComposeClaims(defaultClaimsConfig(), fbCfg, identity, nil, "bbbbbb")
+
+	if c1["device_external_id"] == c2["device_external_id"] {
+		t.Error("different nonces should produce different external IDs")
+	}
+}
+
+func TestExpandFallbackTemplate(t *testing.T) {
+	got := expandFallbackTemplate("{username}-pending-{nonce_short}", "alice", "abc123")
+	if got != "alice-pending-abc123" {
+		t.Errorf("expandFallbackTemplate = %q", got)
 	}
 }
 
@@ -117,7 +160,7 @@ func TestMintTokenRoundtrip(t *testing.T) {
 		Raw:      map[string]interface{}{"preferred_username": "alice"},
 	}
 	cfg := defaultClaimsConfig()
-	claims := ComposeClaims(cfg, identity, &DeviceInfo{DeviceName: "laptop"})
+	claims := ComposeClaims(cfg, FallbackConfig{}, identity, &DeviceInfo{DeviceName: "laptop"}, "")
 
 	tokenCfg := TokenConfig{
 		Issuer:   "https://zdas.example.com",
