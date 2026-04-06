@@ -24,7 +24,8 @@ func TestComposeClaimsBasic(t *testing.T) {
 		Issuer:   "https://keycloak.example.com",
 		Raw:      map[string]interface{}{"preferred_username": "jsmith", "sub": "u42"},
 	}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, "macbook-pro")
+	info := &DeviceInfo{DeviceName: "macbook-pro", Hostname: "macbook-pro", OS: "darwin", Arch: "arm64"}
+	claims := ComposeClaims(defaultClaimsConfig(), identity, info)
 
 	if got := claims["device_identity_name"]; got != "jsmith-macbook-pro" {
 		t.Errorf("device_identity_name = %q", got)
@@ -44,27 +45,25 @@ func TestComposeClaimsBasic(t *testing.T) {
 }
 
 func TestComposeClaimsUsernameFallback(t *testing.T) {
-	// No preferred_username in Raw; should fall back to Username.
 	identity := &UpstreamIdentity{
 		Subject:  "sub1",
 		Username: "fallback-user",
 		Issuer:   "https://idp",
 		Raw:      map[string]interface{}{},
 	}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, "laptop")
+	claims := ComposeClaims(defaultClaimsConfig(), identity, &DeviceInfo{DeviceName: "laptop"})
 	if got := claims["device_identity_name"]; got != "fallback-user-laptop" {
 		t.Errorf("identity name with fallback = %q", got)
 	}
 }
 
 func TestComposeClaimsSubjectFallback(t *testing.T) {
-	// No username at all - should fall back to Subject.
 	identity := &UpstreamIdentity{
 		Subject: "anon-sub",
 		Issuer:  "https://idp",
 		Raw:     map[string]interface{}{},
 	}
-	claims := ComposeClaims(defaultClaimsConfig(), identity, "phone")
+	claims := ComposeClaims(defaultClaimsConfig(), identity, &DeviceInfo{DeviceName: "phone"})
 	if got := claims["device_identity_name"]; got != "anon-sub-phone" {
 		t.Errorf("identity name with subject fallback = %q", got)
 	}
@@ -88,16 +87,20 @@ func TestExternalIDDiffersByIssuer(t *testing.T) {
 
 func TestExpandTemplate(t *testing.T) {
 	cases := []struct {
-		tmpl, user, device, want string
+		tmpl, user string
+		info       *DeviceInfo
+		want       string
 	}{
-		{"{username}-{device_name}", "alice", "macbook", "alice-macbook"},
-		{"{device_name}@{username}", "bob", "phone", "phone@bob"},
-		{"prefix-{username}-{device_name}-suffix", "u", "d", "prefix-u-d-suffix"},
+		{"{username}-{device_name}", "alice", &DeviceInfo{DeviceName: "macbook"}, "alice-macbook"},
+		{"{device_name}@{username}", "bob", &DeviceInfo{DeviceName: "phone"}, "phone@bob"},
+		{"prefix-{username}-{device_name}-suffix", "u", &DeviceInfo{DeviceName: "d"}, "prefix-u-d-suffix"},
+		{"{username}-{hostname}", "alice", &DeviceInfo{Hostname: "macbook-pro.local"}, "alice-macbook-pro.local"},
+		{"{username}-{device_name}-{os}-{arch}", "bob", &DeviceInfo{DeviceName: "laptop", OS: "darwin", Arch: "arm64"}, "bob-laptop-darwin-arm64"},
 	}
 	for _, tc := range cases {
-		got := expandTemplate(tc.tmpl, tc.user, tc.device)
+		got := expandTemplate(tc.tmpl, tc.user, tc.info)
 		if got != tc.want {
-			t.Errorf("expandTemplate(%q, %q, %q) = %q, want %q", tc.tmpl, tc.user, tc.device, got, tc.want)
+			t.Errorf("expandTemplate(%q, %q, %+v) = %q, want %q", tc.tmpl, tc.user, tc.info, got, tc.want)
 		}
 	}
 }
@@ -114,7 +117,7 @@ func TestMintTokenRoundtrip(t *testing.T) {
 		Raw:      map[string]interface{}{"preferred_username": "alice"},
 	}
 	cfg := defaultClaimsConfig()
-	claims := ComposeClaims(cfg, identity, "laptop")
+	claims := ComposeClaims(cfg, identity, &DeviceInfo{DeviceName: "laptop"})
 
 	tokenCfg := TokenConfig{
 		Issuer:   "https://zdas.example.com",
@@ -126,7 +129,6 @@ func TestMintTokenRoundtrip(t *testing.T) {
 		t.Fatalf("MintToken: %v", err)
 	}
 
-	// Parse and verify using the public JWKS.
 	jwksBytes, _ := ks.PublicJWKS()
 	pubSet, _ := jwk.Parse(jwksBytes)
 	tok, err := jwt.Parse([]byte(signed), jwt.WithKeySet(pubSet, jws.WithInferAlgorithmFromKey(true)))
@@ -145,7 +147,6 @@ func TestMintTokenRoundtrip(t *testing.T) {
 	if extID == nil || extID == "" {
 		t.Error("device_external_id missing from token")
 	}
-	// sub should equal the external_id.
 	if tok.Subject() != extID {
 		t.Errorf("sub = %q, device_external_id = %q, want equal", tok.Subject(), extID)
 	}

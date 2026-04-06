@@ -11,12 +11,23 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
+// DeviceInfo holds device metadata collected from the tunneler's query
+// parameters on /authorize.
+type DeviceInfo struct {
+	DeviceName string // primary identifier (from device_name param)
+	Hostname   string // from hostname param
+	OS         string // from os param
+	Arch       string // from arch param
+	OSRelease  string // from os_release param
+	OSVersion  string // from os_version param
+}
+
 // ComposeClaims builds the full set of JWT claims for a ZDAS token from an
-// upstream identity and device name, according to the ClaimsConfig.
-func ComposeClaims(cfg ClaimsConfig, identity *UpstreamIdentity, deviceName string) map[string]interface{} {
+// upstream identity and device info, according to the ClaimsConfig.
+func ComposeClaims(cfg ClaimsConfig, identity *UpstreamIdentity, info *DeviceInfo) map[string]interface{} {
 	username := resolveUsername(cfg.UsernameClaim, identity)
-	identityName := expandTemplate(cfg.NameTemplate, username, deviceName)
-	externalID := computeExternalID(identity.Issuer, identity.Subject, deviceName)
+	identityName := expandTemplate(cfg.NameTemplate, username, info)
+	externalID := computeExternalID(identity.Issuer, identity.Subject, info.DeviceName)
 
 	claims := map[string]interface{}{
 		cfg.IdentityNameClaim: identityName,
@@ -24,7 +35,7 @@ func ComposeClaims(cfg ClaimsConfig, identity *UpstreamIdentity, deviceName stri
 		"upstream_sub":        identity.Subject,
 		"upstream_iss":        identity.Issuer,
 		"preferred_username":  username,
-		"device_name":         deviceName,
+		"device_name":         info.DeviceName,
 	}
 	return claims
 }
@@ -77,10 +88,14 @@ func resolveUsername(claim string, identity *UpstreamIdentity) string {
 	return identity.Subject
 }
 
-// expandTemplate replaces {username} and {device_name} in the template.
-func expandTemplate(tmpl, username, deviceName string) string {
+// expandTemplate replaces placeholders in the name template with values from
+// the username and device info.
+func expandTemplate(tmpl, username string, info *DeviceInfo) string {
 	s := strings.ReplaceAll(tmpl, "{username}", username)
-	s = strings.ReplaceAll(s, "{device_name}", deviceName)
+	s = strings.ReplaceAll(s, "{device_name}", info.DeviceName)
+	s = strings.ReplaceAll(s, "{hostname}", info.Hostname)
+	s = strings.ReplaceAll(s, "{os}", info.OS)
+	s = strings.ReplaceAll(s, "{arch}", info.Arch)
 	return s
 }
 

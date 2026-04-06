@@ -15,7 +15,7 @@ type AuthSession struct {
 	TunnelerState              string
 	TunnelerCodeChallenge      string
 	TunnelerCodeChallengeMethod string
-	DeviceName                 string
+	DeviceInfo                 *DeviceInfo
 	ZDASCodeVerifier           string // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName       string
 	CreatedAt                  time.Time

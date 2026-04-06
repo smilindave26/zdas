@@ -10,8 +10,8 @@ func TestSessionCreateAndGet(t *testing.T) {
 	defer store.Stop()
 
 	sess := &AuthSession{
-		TunnelerRedirectURI: "https://tunneler/callback",
-		DeviceName:          "macbook",
+		TunnelerRedirectURI:  "https://tunneler/callback",
+		DeviceInfo:           &DeviceInfo{DeviceName: "macbook"},
 		UpstreamProviderName: "keycloak",
 	}
 	id, err := store.CreateSession(sess)
@@ -26,8 +26,8 @@ func TestSessionCreateAndGet(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetSession returned nil")
 	}
-	if got.DeviceName != "macbook" {
-		t.Errorf("DeviceName = %q", got.DeviceName)
+	if got.DeviceInfo == nil || got.DeviceInfo.DeviceName != "macbook" {
+		t.Errorf("DeviceInfo.DeviceName = %v", got.DeviceInfo)
 	}
 	if got.UpstreamProviderName != "keycloak" {
 		t.Errorf("UpstreamProviderName = %q", got.UpstreamProviderName)
@@ -38,7 +38,7 @@ func TestSessionConsumedOnGet(t *testing.T) {
 	store := NewSessionStore(10*time.Minute, 60*time.Second)
 	defer store.Stop()
 
-	id, _ := store.CreateSession(&AuthSession{DeviceName: "test"})
+	id, _ := store.CreateSession(&AuthSession{DeviceInfo: &DeviceInfo{DeviceName: "test"}})
 	if store.GetSession(id) == nil {
 		t.Fatal("first get should succeed")
 	}
@@ -51,7 +51,7 @@ func TestSessionExpiration(t *testing.T) {
 	store := NewSessionStore(1*time.Millisecond, 60*time.Second)
 	defer store.Stop()
 
-	id, _ := store.CreateSession(&AuthSession{DeviceName: "test"})
+	id, _ := store.CreateSession(&AuthSession{DeviceInfo: &DeviceInfo{DeviceName: "test"}})
 	time.Sleep(5 * time.Millisecond)
 
 	if store.GetSession(id) != nil {

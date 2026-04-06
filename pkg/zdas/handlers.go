@@ -73,6 +73,11 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	redirectURI := q.Get("redirect_uri")
 	state := q.Get("state")
 	deviceName := q.Get("device_name")
+	hostname := q.Get("hostname")
+	osName := q.Get("os")
+	arch := q.Get("arch")
+	osRelease := q.Get("os_release")
+	osVersion := q.Get("os_version")
 	idpHint := q.Get("idp")
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
@@ -129,8 +134,15 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		TunnelerState:               state,
 		TunnelerCodeChallenge:       codeChallenge,
 		TunnelerCodeChallengeMethod: codeChallengeMethod,
-		DeviceName:                  deviceName,
-		UpstreamProviderName:        provider.Name(),
+		DeviceInfo: &DeviceInfo{
+			DeviceName: deviceName,
+			Hostname:   hostname,
+			OS:         osName,
+			Arch:       arch,
+			OSRelease:  osRelease,
+			OSVersion:  osVersion,
+		},
+		UpstreamProviderName: provider.Name(),
 	}
 
 	var upstreamURL string
@@ -219,7 +231,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := ComposeClaims(h.cfg.Claims, identity, sess.DeviceName)
+	claims := ComposeClaims(h.cfg.Claims, identity, sess.DeviceInfo)
 
 	ac := &AuthCode{
 		Claims:              claims,
@@ -238,7 +250,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		"code":  {zdasCode},
 		"state": {sess.TunnelerState},
 	}.Encode()
-	h.logger.Info("callback complete, redirecting to tunneler", "provider", provider.Name(), "device", sess.DeviceName)
+	h.logger.Info("callback complete, redirecting to tunneler", "provider", provider.Name(), "device", sess.DeviceInfo.DeviceName)
 	http.Redirect(w, r, redir, http.StatusFound)
 }
 

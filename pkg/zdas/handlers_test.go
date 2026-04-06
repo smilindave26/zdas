@@ -162,7 +162,7 @@ func TestTokenEndpointFullFlow(t *testing.T) {
 		Username: "alice",
 		Issuer:   "https://test-idp",
 		Raw:      map[string]interface{}{"preferred_username": "alice"},
-	}, "macbook")
+	}, &DeviceInfo{DeviceName: "macbook"})
 
 	code, err := h.store.CreateCode(&AuthCode{
 		Claims:              claims,
@@ -347,7 +347,7 @@ func TestCallbackToTokenFullFlow(t *testing.T) {
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
-		DeviceName:                  "macbook",
+		DeviceInfo:                  &DeviceInfo{DeviceName: "macbook"},
 		UpstreamProviderName:        "mock-idp",
 	})
 
