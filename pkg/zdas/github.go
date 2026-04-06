@@ -104,7 +104,7 @@ func (p *GitHubProvider) exchangeCode(ctx context.Context, code, redirectURI str
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("github token request: %w", err)
 	}
@@ -112,6 +112,9 @@ func (p *GitHubProvider) exchangeCode(ctx context.Context, code, redirectURI str
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read github token response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github token endpoint returned %d: %s", resp.StatusCode, body)
 	}
 
 	var result map[string]interface{}
@@ -137,7 +140,7 @@ func (p *GitHubProvider) fetchUser(ctx context.Context, accessToken string) (map
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("github user request: %w", err)
 	}
@@ -158,7 +161,7 @@ func (p *GitHubProvider) fetchUser(ctx context.Context, accessToken string) (map
 }
 
 func (p *GitHubProvider) checkOrgs(ctx context.Context, accessToken string) error {
-	orgsURL := strings.Replace(p.apiBaseURL, "/user", "/user/orgs", 1)
+	orgsURL := strings.TrimSuffix(p.apiBaseURL, "/") + "/orgs"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, orgsURL, nil)
 	if err != nil {
 		return fmt.Errorf("build github orgs request: %w", err)
@@ -166,7 +169,7 @@ func (p *GitHubProvider) checkOrgs(ctx context.Context, accessToken string) erro
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("github orgs request: %w", err)
 	}

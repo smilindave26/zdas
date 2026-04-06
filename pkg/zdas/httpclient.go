@@ -8,7 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// httpClient is the shared HTTP client for outbound requests (token exchanges,
+// GitHub API calls, etc.) with a sensible timeout.
+var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // oidcTokenExchange performs an OAuth2 token exchange POST and returns the
 // parsed JSON response body. It is a package-level function variable so tests
@@ -23,7 +28,7 @@ func defaultOIDCTokenExchange(ctx context.Context, tokenURL string, params url.V
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}

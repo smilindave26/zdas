@@ -19,11 +19,13 @@ func (s *Server) listenACME() error {
 	s.httpSrv.TLSConfig = m.TLSConfig()
 
 	if s.cfg.Listen != ":443" {
+		chalSrv := &http.Server{
+			Addr:      ":443",
+			Handler:   m.HTTPHandler(nil),
+			TLSConfig: m.TLSConfig(),
+		}
+		s.chalSrv = chalSrv
 		go func() {
-			chalSrv := &http.Server{
-				Addr:    ":443",
-				Handler: m.HTTPHandler(nil),
-			}
 			if err := chalSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Error("acme challenge listener failed", "error", err)
 			}

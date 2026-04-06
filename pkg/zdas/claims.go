@@ -34,18 +34,17 @@ func MintToken(cfg TokenConfig, claims map[string]interface{}, ks *KeySet) (stri
 	now := time.Now()
 	tok := jwt.New()
 	_ = tok.Set(jwt.IssuerKey, cfg.Issuer)
-	_ = tok.Set(jwt.SubjectKey, claims[cfg.Audience]) // will be overridden below
 	_ = tok.Set(jwt.AudienceKey, cfg.Audience)
 	_ = tok.Set(jwt.IssuedAtKey, now)
 	_ = tok.Set(jwt.ExpirationKey, now.Add(cfg.Expiry))
 
-	// Set sub to the external ID if present (per spec: sub = device_external_id).
-	if extID, ok := claims["device_external_id"].(string); ok {
-		_ = tok.Set(jwt.SubjectKey, extID)
-	}
-
 	for k, v := range claims {
 		_ = tok.Set(k, v)
+	}
+
+	// Per spec: sub = device_external_id.
+	if extID, ok := claims["device_external_id"].(string); ok {
+		_ = tok.Set(jwt.SubjectKey, extID)
 	}
 
 	privJWK, err := jwk.FromRaw(ks.Private())

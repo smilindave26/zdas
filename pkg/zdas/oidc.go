@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -177,14 +178,7 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 
 // joinScopes joins scopes with space separator per OAuth2 spec.
 func joinScopes(scopes []string) string {
-	s := ""
-	for i, sc := range scopes {
-		if i > 0 {
-			s += " "
-		}
-		s += sc
-	}
-	return s
+	return strings.Join(scopes, " ")
 }
 
 // generatePKCE creates a new PKCE code verifier (32 random bytes, base64url)

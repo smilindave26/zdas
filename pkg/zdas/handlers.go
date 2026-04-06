@@ -77,11 +77,18 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
 
-	// Validate required parameters.
+	// Validate redirect_uri early - before we trust it for error redirects.
 	if redirectURI == "" {
 		http.Error(w, "redirect_uri is required", http.StatusBadRequest)
 		return
 	}
+	parsedRedirect, err := url.Parse(redirectURI)
+	if err != nil || (parsedRedirect.Scheme != "http" && parsedRedirect.Scheme != "https") {
+		http.Error(w, "redirect_uri must be a valid http(s) URL", http.StatusBadRequest)
+		return
+	}
+
+	// Validate remaining required parameters.
 	if codeChallenge == "" || codeChallengeMethod == "" {
 		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "PKCE code_challenge and code_challenge_method are required")
 		return
@@ -92,6 +99,10 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if deviceName == "" {
 		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name parameter required")
+		return
+	}
+	if len(deviceName) > 255 {
+		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name too long (max 255 characters)")
 		return
 	}
 

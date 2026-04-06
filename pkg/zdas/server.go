@@ -18,6 +18,7 @@ type Server struct {
 	discovery *Discovery
 	handlers  *Handlers
 	httpSrv   *http.Server
+	chalSrv   *http.Server // ACME challenge listener (if separate from main)
 	logger    *slog.Logger
 }
 
@@ -63,10 +64,24 @@ func NewServer(cfg Config, logger *slog.Logger) (*Server, error) {
 	}, nil
 }
 
-// NewHandler returns an http.Handler for embedding ZDAS in another application.
+// Handler wraps an http.Handler with a Stop method for clean shutdown of
+// background goroutines (discovery polling, session cleanup).
+type Handler struct {
+	http.Handler
+	srv *Server
+}
+
+// Stop halts background goroutines started by NewHandler. Call this when the
+// embedding application is shutting down.
+func (h *Handler) Stop() {
+	h.srv.discovery.Stop()
+	h.srv.store.Stop()
+}
+
+// NewHandler returns a Handler for embedding ZDAS in another application.
 // It performs initial discovery but does not start an HTTP server. The caller
-// is responsible for serving the returned handler.
-func NewHandler(cfg Config, logger *slog.Logger) (http.Handler, error) {
+// is responsible for serving the returned handler and calling Stop on shutdown.
+func NewHandler(cfg Config, logger *slog.Logger) (*Handler, error) {
 	srv, err := NewServer(cfg, logger)
 	if err != nil {
 		return nil, err
@@ -75,7 +90,7 @@ func NewHandler(cfg Config, logger *slog.Logger) (http.Handler, error) {
 	if err := srv.discovery.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start discovery: %w", err)
 	}
-	return srv.handlers.Mux(), nil
+	return &Handler{Handler: srv.handlers.Mux(), srv: srv}, nil
 }
 
 // Start performs initial discovery and begins serving HTTP(S). It blocks until
@@ -117,6 +132,9 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.discovery.Stop()
 	s.store.Stop()
+	if s.chalSrv != nil {
+		s.chalSrv.Shutdown(ctx)
+	}
 	if s.httpSrv != nil {
 		return s.httpSrv.Shutdown(ctx)
 	}
