@@ -334,3 +334,150 @@ func TestIntegrationGitHubFlow(t *testing.T) {
 		t.Errorf("upstream_sub = %v, want 77777", upSub)
 	}
 }
+
+// TestIntegrationFallbackFlow tests enrollment without device_name when
+// fallback is enabled. The JWT should have a pending-style name and
+// nonce-based external ID.
+func TestIntegrationFallbackFlow(t *testing.T) {
+	idpClaims := map[string]interface{}{
+		"sub":                "fallback-user",
+		"preferred_username": "charlie",
+	}
+	idpServer, _ := mockOIDCServer(t, idpClaims)
+
+	ctrlMux := http.NewServeMux()
+	ctrlMux.HandleFunc("/edge/client/v1/external-jwt-signers", func(w http.ResponseWriter, r *http.Request) {
+		resp := signerResponse{Data: []signerEntry{
+			{
+				Name:                "test-kc",
+				Issuer:              idpServer.URL,
+				ClientID:            "test-client",
+				ExternalAuthURL:     idpServer.URL + "/authorize",
+				EnrollToCertEnabled: true,
+			},
+		}}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	ctrlServer := httptest.NewServer(ctrlMux)
+	t.Cleanup(ctrlServer.Close)
+
+	cfg := Config{
+		Listen:      ":0",
+		ExternalURL: "https://zdas.test",
+		TLS:         TLSConfig{Mode: TLSModeNone},
+		Controller: ControllerConfig{
+			APIURL:       ctrlServer.URL,
+			PollInterval: 0,
+			SelfIssuer:   "https://zdas.test",
+		},
+		Fallback: FallbackConfig{
+			Enabled:          true,
+			PollInterval:     10 * time.Second,
+			TempNameTemplate: "{username}-pending-{nonce_short}",
+			Timeout:          1 * time.Hour,
+		},
+		Claims: ClaimsConfig{
+			UsernameClaim:     "preferred_username",
+			NameTemplate:      "{username}-{device_name}",
+			IdentityNameClaim: "device_identity_name",
+			ExternalIDClaim:   "device_external_id",
+		},
+		Token: TokenConfig{
+			Issuer:   "https://zdas.test",
+			Audience: "ziti-enrolltocert",
+			Expiry:   5 * time.Minute,
+		},
+		Session: SessionConfig{
+			Timeout:    10 * time.Minute,
+			CodeExpiry: 60 * time.Second,
+		},
+	}
+
+	// Build server components manually (no identity file needed for this test).
+	keys, _ := GenerateKeySet()
+	registry := NewProviderRegistry()
+	store := NewSessionStore(cfg.Session.Timeout, cfg.Session.CodeExpiry)
+	t.Cleanup(store.Stop)
+
+	disc, _ := NewDiscovery(cfg.Controller, registry, nil, slog.Default())
+	if err := disc.RunOnce(t.Context()); err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	// No reconciler in this test (no identity file), but fallback is enabled.
+	h := NewHandlers(cfg, keys, registry, store, nil, slog.Default())
+	mux := h.Mux()
+
+	// Tunneler sends /authorize WITHOUT device_name.
+	verifier, challenge := generateTestPKCE(t)
+	authReq := "/authorize?" + url.Values{
+		"redirect_uri":          {"https://tunneler/cb"},
+		"response_type":         {"code"},
+		"state":                 {"fb-state"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"client_id":             {"ziti-enrolltocert"},
+	}.Encode()
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, authReq, nil))
+	if w.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	upstreamRedirect, _ := url.Parse(w.Header().Get("Location"))
+	if strings.Contains(upstreamRedirect.String(), "error=") {
+		t.Fatalf("expected upstream redirect, got error: %s", upstreamRedirect)
+	}
+	sessionState := upstreamRedirect.Query().Get("state")
+
+	// Simulate upstream callback.
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/callback?code=upstream-code&state="+sessionState, nil))
+	if w.Code != http.StatusFound {
+		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	tunnelerRedirect, _ := url.Parse(w.Header().Get("Location"))
+	zdasCode := tunnelerRedirect.Query().Get("code")
+
+	// Token exchange.
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {zdasCode},
+		"redirect_uri":  {"https://tunneler/cb"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, tokenReq)
+	if w.Code != http.StatusOK {
+		t.Fatalf("token: status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	var tokenResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &tokenResp)
+	rawJWT := tokenResp["id_token"].(string)
+
+	jwksBytes, _ := keys.PublicJWKS()
+	pubSet, _ := jwk.Parse(jwksBytes)
+	tok, err := jwt.Parse([]byte(rawJWT), jwt.WithKeySet(pubSet, jws.WithInferAlgorithmFromKey(true)))
+	if err != nil {
+		t.Fatalf("verify jwt: %v", err)
+	}
+
+	// Verify fallback claims.
+	idName, _ := tok.Get("device_identity_name")
+	name := idName.(string)
+	if !strings.HasPrefix(name, "charlie-pending-") {
+		t.Errorf("device_identity_name = %q, want charlie-pending-*", name)
+	}
+	extID, _ := tok.Get("device_external_id")
+	if extID == nil || extID == "" {
+		t.Error("device_external_id missing")
+	}
+	devName, _ := tok.Get("device_name")
+	if devName != "" {
+		t.Errorf("device_name should be empty for fallback, got %v", devName)
+	}
+}

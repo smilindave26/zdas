@@ -11,15 +11,16 @@ import (
 // Server is the top-level ZDAS instance. It wires together config, key
 // management, provider discovery, session storage, and HTTP serving.
 type Server struct {
-	cfg       Config
-	keys      *KeySet
-	registry  *ProviderRegistry
-	store     *SessionStore
-	discovery *Discovery
-	handlers  *Handlers
-	httpSrv   *http.Server
-	chalSrv   *http.Server // ACME challenge listener (if separate from main)
-	logger    *slog.Logger
+	cfg        Config
+	keys       *KeySet
+	registry   *ProviderRegistry
+	store      *SessionStore
+	discovery  *Discovery
+	reconciler *Reconciler // nil when fallback is disabled
+	handlers   *Handlers
+	httpSrv    *http.Server
+	chalSrv    *http.Server // ACME challenge listener (if separate from main)
+	logger     *slog.Logger
 }
 
 // NewServer creates a fully-wired Server. Call Start to begin serving.
@@ -51,16 +52,32 @@ func NewServer(cfg Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("create discovery: %w", err)
 	}
 
-	handlers := NewHandlers(cfg, keys, registry, store, logger)
+	var reconciler *Reconciler
+	if cfg.Fallback.Enabled && cfg.Controller.IdentityFile != "" {
+		id, err := loadIdentityFile(cfg.Controller.IdentityFile)
+		if err != nil {
+			return nil, fmt.Errorf("load identity file for reconciler: %w", err)
+		}
+		mgmtClient := managementClientFromIdentity(id)
+		apiURL := cfg.Controller.APIURL
+		if id.APIURL != "" {
+			apiURL = id.APIURL
+		}
+		reconciler = NewReconciler(cfg.Fallback, cfg.Claims, mgmtClient, apiURL, logger)
+		logger.Info("fallback reconciler enabled", "poll_interval", cfg.Fallback.PollInterval)
+	}
+
+	handlers := NewHandlers(cfg, keys, registry, store, reconciler, logger)
 
 	return &Server{
-		cfg:       cfg,
-		keys:      keys,
-		registry:  registry,
-		store:     store,
-		discovery: disc,
-		handlers:  handlers,
-		logger:    logger,
+		cfg:        cfg,
+		keys:       keys,
+		registry:   registry,
+		store:      store,
+		discovery:  disc,
+		reconciler: reconciler,
+		handlers:   handlers,
+		logger:     logger,
 	}, nil
 }
 
@@ -75,6 +92,9 @@ type Handler struct {
 // embedding application is shutting down.
 func (h *Handler) Stop() {
 	h.srv.discovery.Stop()
+	if h.srv.reconciler != nil {
+		h.srv.reconciler.Stop()
+	}
 	h.srv.store.Stop()
 }
 
@@ -98,6 +118,9 @@ func NewHandler(cfg Config, logger *slog.Logger) (*Handler, error) {
 func (s *Server) Start(ctx context.Context) error {
 	if err := s.discovery.Start(ctx); err != nil {
 		return fmt.Errorf("start discovery: %w", err)
+	}
+	if s.reconciler != nil {
+		s.reconciler.Start(ctx)
 	}
 
 	mux := s.handlers.Mux()
@@ -131,6 +154,9 @@ func (s *Server) Start(ctx context.Context) error {
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.discovery.Stop()
+	if s.reconciler != nil {
+		s.reconciler.Stop()
+	}
 	s.store.Stop()
 	if s.chalSrv != nil {
 		s.chalSrv.Shutdown(ctx)

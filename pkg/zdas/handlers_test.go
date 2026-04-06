@@ -35,7 +35,7 @@ func setupHandlers(t *testing.T) (*Handlers, *stubProvider) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, slog.Default())
 	return h, sp
 }
 
@@ -133,7 +133,7 @@ func TestHandleAuthorizeFallbackEnabled(t *testing.T) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, slog.Default())
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
@@ -379,7 +379,7 @@ func TestCallbackToTokenFullFlow(t *testing.T) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, slog.Default())
 	mux := h.Mux()
 
 	// Pre-create a session as if /authorize had run.

@@ -12,21 +12,24 @@ import (
 
 // Handlers groups the HTTP handler dependencies for the ZDAS endpoints.
 type Handlers struct {
-	cfg      Config
-	keys     *KeySet
-	registry *ProviderRegistry
-	store    *SessionStore
-	logger   *slog.Logger
+	cfg        Config
+	keys       *KeySet
+	registry   *ProviderRegistry
+	store      *SessionStore
+	reconciler *Reconciler // nil when fallback is disabled
+	logger     *slog.Logger
 }
 
-// NewHandlers creates a Handlers with the given dependencies.
-func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, logger *slog.Logger) *Handlers {
+// NewHandlers creates a Handlers with the given dependencies. reconciler may
+// be nil when fallback is disabled.
+func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, reconciler *Reconciler, logger *slog.Logger) *Handlers {
 	return &Handlers{
-		cfg:      cfg,
-		keys:     keys,
-		registry: registry,
-		store:    store,
-		logger:   logger,
+		cfg:        cfg,
+		keys:       keys,
+		registry:   registry,
+		store:      store,
+		reconciler: reconciler,
+		logger:     logger,
 	}
 }
 
@@ -251,6 +254,14 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := ComposeClaims(h.cfg.Claims, h.cfg.Fallback, identity, sess.DeviceInfo, sess.FallbackNonce)
+
+	// Track fallback enrollments for reconciliation.
+	if sess.FallbackNonce != "" && h.reconciler != nil {
+		if extID, ok := claims[h.cfg.Claims.ExternalIDClaim].(string); ok {
+			username, _ := claims["preferred_username"].(string)
+			h.reconciler.Track(extID, username, sess.FallbackNonce)
+		}
+	}
 
 	ac := &AuthCode{
 		Claims:              claims,
