@@ -28,6 +28,7 @@ type Config struct {
 	ExternalURL string           `yaml:"external_url"`
 	TLS         TLSConfig        `yaml:"tls"`
 	Controller  ControllerConfig `yaml:"controller"`
+	Fallback    FallbackConfig   `yaml:"fallback"`
 	Providers   []ProviderConfig `yaml:"providers"`
 	Claims      ClaimsConfig     `yaml:"claims"`
 	Token       TokenConfig      `yaml:"token"`
@@ -49,12 +50,22 @@ type ACMEConfig struct {
 }
 
 // ControllerConfig describes how ZDAS reaches the Ziti controller to discover
-// upstream ext-jwt-signers.
+// upstream ext-jwt-signers and (optionally) manage identities via the
+// management API.
 type ControllerConfig struct {
 	APIURL       string        `yaml:"api_url"`
-	CAFile       string        `yaml:"ca_file"`
+	IdentityFile string        `yaml:"identity_file"` // Ziti identity JSON (cert, key, CA)
 	PollInterval time.Duration `yaml:"poll_interval"`
 	SelfIssuer   string        `yaml:"self_issuer"`
+}
+
+// FallbackConfig controls the fallback enrollment path for unmodified tunnelers
+// that don't send device_name.
+type FallbackConfig struct {
+	Enabled          bool          `yaml:"enabled"`
+	PollInterval     time.Duration `yaml:"poll_interval"`
+	TempNameTemplate string        `yaml:"temp_name_template"`
+	Timeout          time.Duration `yaml:"timeout"` // how long to track a fallback identity before giving up
 }
 
 // ProviderConfig is the config for a non-OIDC upstream provider (e.g. GitHub).
@@ -155,6 +166,15 @@ func (c *Config) applyDefaults() {
 	if c.Session.CodeExpiry == 0 {
 		c.Session.CodeExpiry = 60 * time.Second
 	}
+	if c.Fallback.PollInterval == 0 {
+		c.Fallback.PollInterval = 10 * time.Second
+	}
+	if c.Fallback.TempNameTemplate == "" {
+		c.Fallback.TempNameTemplate = "{username}-pending-{nonce_short}"
+	}
+	if c.Fallback.Timeout == 0 {
+		c.Fallback.Timeout = 1 * time.Hour
+	}
 	for i := range c.Providers {
 		p := &c.Providers[i]
 		if p.Type == ProviderTypeGitHub {
@@ -221,6 +241,14 @@ func (c *Config) Validate() error {
 	if !strings.Contains(c.Claims.NameTemplate, "{username}") || !strings.Contains(c.Claims.NameTemplate, "{device_name}") {
 		return errors.New("claims.name_template must contain both {username} and {device_name}")
 	}
+	if c.Fallback.Enabled {
+		if c.Controller.IdentityFile == "" {
+			return errors.New("fallback.enabled requires controller.identity_file for management API access")
+		}
+		if !strings.Contains(c.Fallback.TempNameTemplate, "{username}") {
+			return errors.New("fallback.temp_name_template must contain {username}")
+		}
+	}
 	return nil
 }
 
@@ -239,9 +267,18 @@ func (c *Config) applyEnv() error {
 	setString(&c.TLS.ACME.CacheDir, "ZDAS_TLS_ACME_CACHE_DIR")
 
 	setString(&c.Controller.APIURL, "ZDAS_CONTROLLER_API_URL")
-	setString(&c.Controller.CAFile, "ZDAS_CONTROLLER_CA_FILE")
+	setString(&c.Controller.IdentityFile, "ZDAS_CONTROLLER_IDENTITY_FILE")
 	setString(&c.Controller.SelfIssuer, "ZDAS_CONTROLLER_SELF_ISSUER")
 	if err := setDuration(&c.Controller.PollInterval, "ZDAS_CONTROLLER_POLL_INTERVAL"); err != nil {
+		return err
+	}
+
+	setBool(&c.Fallback.Enabled, "ZDAS_FALLBACK_ENABLED")
+	setString(&c.Fallback.TempNameTemplate, "ZDAS_FALLBACK_TEMP_NAME_TEMPLATE")
+	if err := setDuration(&c.Fallback.PollInterval, "ZDAS_FALLBACK_POLL_INTERVAL"); err != nil {
+		return err
+	}
+	if err := setDuration(&c.Fallback.Timeout, "ZDAS_FALLBACK_TIMEOUT"); err != nil {
 		return err
 	}
 
@@ -276,6 +313,14 @@ func setString(dst *string, key string) {
 	if v, ok := os.LookupEnv(key); ok {
 		*dst = v
 	}
+}
+
+func setBool(dst *bool, key string) {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return
+	}
+	*dst = v == "true" || v == "1" || v == "yes"
 }
 
 func setDuration(dst *time.Duration, key string) error {

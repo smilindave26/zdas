@@ -70,6 +70,18 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Session.CodeExpiry != 60*time.Second {
 		t.Errorf("Session.CodeExpiry default = %v", cfg.Session.CodeExpiry)
 	}
+	if cfg.Fallback.Enabled {
+		t.Error("Fallback.Enabled should default to false")
+	}
+	if cfg.Fallback.PollInterval != 10*time.Second {
+		t.Errorf("Fallback.PollInterval default = %v, want 10s", cfg.Fallback.PollInterval)
+	}
+	if cfg.Fallback.TempNameTemplate != "{username}-pending-{nonce_short}" {
+		t.Errorf("Fallback.TempNameTemplate default = %q", cfg.Fallback.TempNameTemplate)
+	}
+	if cfg.Fallback.Timeout != 1*time.Hour {
+		t.Errorf("Fallback.Timeout default = %v, want 1h", cfg.Fallback.Timeout)
+	}
 }
 
 func TestLoadConfigEnvOverrides(t *testing.T) {
@@ -200,6 +212,51 @@ func TestValidateNameTemplateMustContainPlaceholders(t *testing.T) {
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "device_name") {
 		t.Errorf("expected name_template placeholder error, got %v", err)
+	}
+}
+
+func TestValidateFallbackRequiresIdentityFile(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Fallback:    FallbackConfig{Enabled: true},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "identity_file") {
+		t.Errorf("expected identity_file error, got %v", err)
+	}
+}
+
+func TestValidateFallbackTempTemplateMustContainUsername(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c", IdentityFile: "/tmp/id.json"},
+		Fallback:    FallbackConfig{Enabled: true, TempNameTemplate: "no-username-{nonce_short}"},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "temp_name_template") {
+		t.Errorf("expected temp_name_template error, got %v", err)
+	}
+}
+
+func TestFallbackEnvOverride(t *testing.T) {
+	path := writeTempConfig(t, minimalYAML)
+	t.Setenv("ZDAS_FALLBACK_ENABLED", "true")
+	t.Setenv("ZDAS_FALLBACK_POLL_INTERVAL", "30s")
+	t.Setenv("ZDAS_CONTROLLER_IDENTITY_FILE", "/tmp/id.json")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.Fallback.Enabled {
+		t.Error("Fallback.Enabled env override failed")
+	}
+	if cfg.Fallback.PollInterval != 30*time.Second {
+		t.Errorf("Fallback.PollInterval env override = %v", cfg.Fallback.PollInterval)
+	}
+	if cfg.Controller.IdentityFile != "/tmp/id.json" {
+		t.Errorf("Controller.IdentityFile env override = %q", cfg.Controller.IdentityFile)
 	}
 }
 

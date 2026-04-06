@@ -33,7 +33,7 @@ type Discovery struct {
 // provider names that come from the ZDAS config (GitHub, etc.) and must not
 // collide with discovered signers.
 func NewDiscovery(cfg ControllerConfig, registry *ProviderRegistry, configuredNames map[string]struct{}, logger *slog.Logger) (*Discovery, error) {
-	client, err := controllerClient(cfg.CAFile)
+	client, err := controllerClient(cfg.IdentityFile)
 	if err != nil {
 		return nil, err
 	}
@@ -180,22 +180,24 @@ func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
 	return result.Data, nil
 }
 
-// controllerClient builds an HTTP client that trusts the given CA file (in
-// addition to the system roots). If caFile is empty, it returns a plain client.
-func controllerClient(caFile string) (*http.Client, error) {
-	if caFile == "" {
+// controllerClient builds an HTTP client for controller communication. If
+// identityFile is empty, it returns a plain client. If set, the CA bundle is
+// extracted from the identity JSON to verify the controller's TLS certificate.
+func controllerClient(identityFile string) (*http.Client, error) {
+	if identityFile == "" {
 		return &http.Client{Timeout: 15 * time.Second}, nil
 	}
-	pem, err := os.ReadFile(caFile)
+	// TODO(commit3): Parse identity JSON and extract CA. For now, treat as PEM.
+	pemData, err := os.ReadFile(identityFile)
 	if err != nil {
-		return nil, fmt.Errorf("read controller CA file: %w", err)
+		return nil, fmt.Errorf("read identity file: %w", err)
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		pool = x509.NewCertPool()
 	}
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("no valid certs found in %s", caFile)
+	if !pool.AppendCertsFromPEM(pemData) {
+		return nil, fmt.Errorf("no valid certs found in %s", identityFile)
 	}
 	return &http.Client{
 		Timeout: 15 * time.Second,
