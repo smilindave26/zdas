@@ -15,8 +15,9 @@ type AuthSession struct {
 	TunnelerState              string
 	TunnelerCodeChallenge      string
 	TunnelerCodeChallengeMethod string
-	DeviceInfo                 *DeviceInfo
-	ZDASCodeVerifier           string // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
+	DeviceInfo                 *DeviceInfo // nil when fallback path (unmodified tunneler)
+	FallbackNonce              string     // populated only on fallback path
+	ZDASCodeVerifier           string     // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName       string
 	CreatedAt                  time.Time
 }
@@ -28,6 +29,7 @@ type AuthCode struct {
 	RedirectURI         string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	IsFallback          bool // true if enrolled via fallback path
 	CreatedAt           time.Time
 	Used                bool
 }
