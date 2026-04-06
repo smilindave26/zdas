@@ -156,6 +156,49 @@ func TestHandleAuthorizeFallbackEnabled(t *testing.T) {
 	}
 }
 
+func TestHandleAuthorizeIDPSelector(t *testing.T) {
+	ks, _ := GenerateKeySet()
+	reg := NewProviderRegistry()
+	_ = reg.Register(&stubProvider{name: "keycloak", issuer: "https://kc"})
+	_ = reg.Register(&stubProvider{name: "github", issuer: "https://github.com"})
+	store := NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	cfg := Config{
+		ExternalURL: "https://zdas.example.com",
+		Claims:      defaultClaimsConfig(),
+		Token:       TokenConfig{Issuer: "https://zdas.example.com", Audience: "ziti-enrolltocert", Expiry: 5 * time.Minute},
+	}
+	h := NewHandlers(cfg, ks, reg, store, nil, slog.Default())
+	mux := h.Mux()
+
+	_, challenge := generateTestPKCE(t)
+	// No idp param, multiple providers - should show selector page.
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Select") {
+		t.Error("expected selector page title")
+	}
+	if !strings.Contains(body, "keycloak") || !strings.Contains(body, "github") {
+		t.Errorf("expected both provider names in page, got: %s", body)
+	}
+	// Each link should carry forward the original query params.
+	if !strings.Contains(body, "device_name=laptop") {
+		t.Error("expected device_name in selector links")
+	}
+	if !strings.Contains(body, "idp=keycloak") || !strings.Contains(body, "idp=github") {
+		t.Error("expected idp param in selector links")
+	}
+}
+
 func TestHandleAuthorizeMissingPKCE(t *testing.T) {
 	h, _ := setupHandlers(t)
 	mux := h.Mux()

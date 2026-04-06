@@ -4,9 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -140,7 +143,9 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "multiple") {
-			oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "multiple idps available, idp parameter required")
+			// Show an IdP selection page so the user can choose.
+			h.renderIDPSelector(w, r)
+			return
 		} else if strings.Contains(errMsg, "no upstream") {
 			h.logger.Error("no upstream providers configured")
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "no upstream providers available")
@@ -373,3 +378,52 @@ func tokenError(w http.ResponseWriter, errCode, errDesc string) {
 		"error_description": errDesc,
 	})
 }
+
+// renderIDPSelector shows an HTML page listing available identity providers.
+// Each link carries forward the original query parameters with the idp param
+// filled in, so clicking a provider re-enters /authorize with the selection.
+func (h *Handlers) renderIDPSelector(w http.ResponseWriter, r *http.Request) {
+	names := h.registry.Names()
+	sort.Strings(names)
+
+	// Rebuild the original query without idp so we can add it per-provider.
+	baseQuery := r.URL.Query()
+	baseQuery.Del("idp")
+
+	var links strings.Builder
+	for _, name := range names {
+		q := make(url.Values)
+		for k, v := range baseQuery {
+			q[k] = v
+		}
+		q.Set("idp", name)
+		href := "/authorize?" + q.Encode()
+		links.WriteString(fmt.Sprintf(
+			`<a href="%s">%s</a>`,
+			html.EscapeString(href),
+			html.EscapeString(name),
+		))
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, idpSelectorHTML, links.String())
+}
+
+const idpSelectorHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Select Identity Provider</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 1.4em; font-weight: 600; margin-bottom: 24px; }
+  a { display: block; padding: 14px 20px; margin: 8px 0; background: #f5f5f5; border: 1px solid #ddd; border-radius: 8px; color: #333; text-decoration: none; font-size: 1em; }
+  a:hover { background: #e8e8e8; border-color: #ccc; }
+</style>
+</head>
+<body>
+<h1>Select an identity provider</h1>
+%s
+</body>
+</html>`
