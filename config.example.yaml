@@ -17,11 +17,23 @@ tls:
   #     - "das.example.com"
   #   cache_dir: "/var/lib/zdas/certs"
 
-# Ziti controller - ZDAS discovers upstream IdPs from here
+# Ziti controller - ZDAS discovers upstream IdPs and manages identities here
 controller:
   api_url: "https://controller.example.com:1280"
-  # ca_file: "/path/to/controller-ca.pem"     # if controller uses a private CA
+  # Ziti identity JSON file with admin=true - used for mTLS to the controller
+  # and management API access (required for fallback reconciliation).
+  # The file contains cert, key, and CA bundle.
+  # identity_file: "/path/to/zdas-admin.json"
   poll_interval: "5m"                          # 0 = startup only
+
+# Fallback for unmodified tunnelers that don't send device_name.
+# When enabled, ZDAS allows enrollment without device info and reconciles
+# the identity name after the tunneler connects and reports envInfo.
+fallback:
+  enabled: false                              # set true to allow enrollment without device_name
+  poll_interval: "10s"                        # how often to check for envInfo on pending identities
+  temp_name_template: "{username}-pending-{nonce_short}"
+  timeout: "1h"                               # stop tracking after this long
 
 # Non-OIDC upstream providers (optional)
 # providers:
@@ -35,6 +47,9 @@ controller:
 #     #   - "mycompany"
 
 # Claim composition
+# Updated tunnelers send device info as query params on /authorize:
+#   device_name, hostname, os, arch, os_release, os_version
+# Available template placeholders: {username}, {device_name}, {hostname}, {os}, {arch}
 claims:
   username_claim: "preferred_username"
   name_template: "{username}-{device_name}"
