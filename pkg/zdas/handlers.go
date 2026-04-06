@@ -84,7 +84,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	arch := q.Get("arch")
 	osRelease := q.Get("os_release")
 	osVersion := q.Get("os_version")
-	idpHint := q.Get("idp")
+	idpHint := q.Get("idp") // set by the IdP selector page, not by tunnelers
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
 
@@ -379,9 +379,10 @@ func tokenError(w http.ResponseWriter, errCode, errDesc string) {
 	})
 }
 
-// renderIDPSelector shows an HTML page listing available identity providers.
-// Each link carries forward the original query parameters with the idp param
-// filled in, so clicking a provider re-enters /authorize with the selection.
+// renderIDPSelector shows an HTML page listing available identity providers
+// when multiple are configured and no selection has been made yet. Each link
+// re-enters /authorize with the original query parameters plus idp=<name>,
+// so all tunneler params (redirect_uri, state, PKCE, device info) carry through.
 func (h *Handlers) renderIDPSelector(w http.ResponseWriter, r *http.Request) {
 	names := h.registry.Names()
 	sort.Strings(names)

@@ -173,7 +173,7 @@ func TestHandleAuthorizeIDPSelector(t *testing.T) {
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
-	// No idp param, multiple providers - should show selector page.
+	// Multiple providers, no selection yet - should show selector page.
 	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)

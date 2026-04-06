@@ -10,7 +10,8 @@ import (
 // Handlers call AuthorizeURL to get a redirect, then ExchangeAndIdentify on
 // callback.
 type UpstreamProvider interface {
-	// Name returns the provider name used for idp parameter matching.
+	// Name returns the human-readable provider name, used for display on the
+	// IdP selector page and for resolution by the idp query parameter.
 	Name() string
 
 	// Issuer returns a stable identifier for this provider (OIDC issuer URL,
@@ -78,7 +79,7 @@ func (r *ProviderRegistry) Resolve(hint string) (UpstreamProvider, error) {
 		if len(r.providers) == 0 {
 			return nil, fmt.Errorf("no upstream providers available")
 		}
-		return nil, fmt.Errorf("multiple idps available, idp parameter required")
+		return nil, fmt.Errorf("multiple idps available, selection required")
 	}
 
 	// Match by name first.
