@@ -102,13 +102,34 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "only S256 code_challenge_method is supported")
 		return
 	}
+	var deviceInfo *DeviceInfo
+	var fallbackNonce string
 	if deviceName == "" {
-		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name parameter required")
-		return
-	}
-	if len(deviceName) > 255 {
-		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name too long (max 255 characters)")
-		return
+		if !h.cfg.Fallback.Enabled {
+			oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name parameter required")
+			return
+		}
+		// Fallback path: generate a nonce for this enrollment.
+		nonce, err := generateShortNonce()
+		if err != nil {
+			h.logger.Error("generate fallback nonce", "error", err)
+			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "internal error")
+			return
+		}
+		fallbackNonce = nonce
+	} else {
+		if len(deviceName) > 255 {
+			oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name too long (max 255 characters)")
+			return
+		}
+		deviceInfo = &DeviceInfo{
+			DeviceName: deviceName,
+			Hostname:   hostname,
+			OS:         osName,
+			Arch:       arch,
+			OSRelease:  osRelease,
+			OSVersion:  osVersion,
+		}
 	}
 
 	// Resolve upstream provider.
@@ -134,15 +155,9 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		TunnelerState:               state,
 		TunnelerCodeChallenge:       codeChallenge,
 		TunnelerCodeChallengeMethod: codeChallengeMethod,
-		DeviceInfo: &DeviceInfo{
-			DeviceName: deviceName,
-			Hostname:   hostname,
-			OS:         osName,
-			Arch:       arch,
-			OSRelease:  osRelease,
-			OSVersion:  osVersion,
-		},
-		UpstreamProviderName: provider.Name(),
+		DeviceInfo:                  deviceInfo,
+		FallbackNonce:               fallbackNonce,
+		UpstreamProviderName:        provider.Name(),
 	}
 
 	var upstreamURL string
@@ -183,7 +198,11 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		upstreamURL = provider.AuthorizeURL(sessionState, callbackURL)
 	}
 
-	h.logger.Info("redirecting to upstream", "provider", provider.Name(), "device", deviceName)
+	if fallbackNonce != "" {
+		h.logger.Info("redirecting to upstream (fallback)", "provider", provider.Name(), "nonce", fallbackNonce)
+	} else {
+		h.logger.Info("redirecting to upstream", "provider", provider.Name(), "device", deviceName)
+	}
 	http.Redirect(w, r, upstreamURL, http.StatusFound)
 }
 
@@ -250,7 +269,11 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		"code":  {zdasCode},
 		"state": {sess.TunnelerState},
 	}.Encode()
-	h.logger.Info("callback complete, redirecting to tunneler", "provider", provider.Name(), "device", sess.DeviceInfo.DeviceName)
+	deviceLog := "fallback"
+	if sess.DeviceInfo != nil {
+		deviceLog = sess.DeviceInfo.DeviceName
+	}
+	h.logger.Info("callback complete, redirecting to tunneler", "provider", provider.Name(), "device", deviceLog)
 	http.Redirect(w, r, redir, http.StatusFound)
 }
 

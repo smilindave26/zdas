@@ -94,7 +94,7 @@ func TestHandleJWKS(t *testing.T) {
 	}
 }
 
-func TestHandleAuthorizeMissingDeviceName(t *testing.T) {
+func TestHandleAuthorizeMissingDeviceNameFallbackDisabled(t *testing.T) {
 	h, _ := setupHandlers(t)
 	mux := h.Mux()
 	_, challenge := generateTestPKCE(t)
@@ -111,6 +111,48 @@ func TestHandleAuthorizeMissingDeviceName(t *testing.T) {
 	loc := w.Header().Get("Location")
 	if !strings.Contains(loc, "error=invalid_request") || !strings.Contains(loc, "device_name") {
 		t.Errorf("expected device_name error redirect, got %s", loc)
+	}
+}
+
+func TestHandleAuthorizeFallbackEnabled(t *testing.T) {
+	// Same as setupHandlers but with fallback enabled.
+	ks, _ := GenerateKeySet()
+	reg := NewProviderRegistry()
+	sp := &stubProvider{name: "test-idp", issuer: "https://test-idp"}
+	_ = reg.Register(sp)
+	store := NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	cfg := Config{
+		ExternalURL: "https://zdas.example.com",
+		Fallback:    FallbackConfig{Enabled: true, TempNameTemplate: "{username}-pending-{nonce_short}"},
+		Claims:      defaultClaimsConfig(),
+		Token: TokenConfig{
+			Issuer:   "https://zdas.example.com",
+			Audience: "ziti-enrolltocert",
+			Expiry:   5 * time.Minute,
+		},
+	}
+	h := NewHandlers(cfg, ks, reg, store, slog.Default())
+	mux := h.Mux()
+
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	// Should redirect to upstream (not error), even without device_name.
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if strings.Contains(loc, "error=") {
+		t.Errorf("expected upstream redirect, got error: %s", loc)
+	}
+	if !strings.HasPrefix(loc, "https://stub/test-idp") {
+		t.Errorf("expected redirect to stub provider, got %s", loc)
 	}
 }
 
