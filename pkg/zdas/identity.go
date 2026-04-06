@@ -1,6 +1,7 @@
 package zdas
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -110,7 +111,7 @@ type apiSession struct {
 // passed as the zt-session header on subsequent management API calls.
 func authenticateSession(client *http.Client, apiURL string) (*apiSession, error) {
 	authURL := strings.TrimSuffix(apiURL, "/") + "/authenticate?method=cert"
-	req, err := http.NewRequest(http.MethodPost, authURL, strings.NewReader("{}"))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, authURL, strings.NewReader("{}"))
 	if err != nil {
 		return nil, fmt.Errorf("build authenticate request: %w", err)
 	}

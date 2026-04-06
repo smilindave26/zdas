@@ -79,18 +79,24 @@ func (r *Reconciler) Start(ctx context.Context) {
 	}
 
 	pollCtx, cancel := context.WithCancel(ctx)
+	r.mu.Lock()
 	r.cancel = cancel
 	r.stopped = make(chan struct{})
+	r.mu.Unlock()
 	go r.loop(pollCtx)
 }
 
 // Stop cancels the background poll loop and waits for it to exit.
 func (r *Reconciler) Stop() {
-	if r.cancel != nil {
-		r.cancel()
+	r.mu.Lock()
+	cancel := r.cancel
+	stopped := r.stopped
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if r.stopped != nil {
-		<-r.stopped
+	if stopped != nil {
+		<-stopped
 	}
 }
 

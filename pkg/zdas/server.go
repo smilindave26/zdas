@@ -110,6 +110,9 @@ func NewHandler(cfg Config, logger *slog.Logger) (*Handler, error) {
 	if err := srv.discovery.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start discovery: %w", err)
 	}
+	if srv.reconciler != nil {
+		srv.reconciler.Start(ctx)
+	}
 	return &Handler{Handler: srv.handlers.Mux(), srv: srv}, nil
 }
 

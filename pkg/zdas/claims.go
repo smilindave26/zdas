@@ -45,6 +45,7 @@ func ComposeClaims(cfg ClaimsConfig, fbCfg FallbackConfig, identity *UpstreamIde
 	claims := map[string]interface{}{
 		cfg.IdentityNameClaim: identityName,
 		cfg.ExternalIDClaim:   externalID,
+		"sub":                 externalID, // per spec: sub = device_external_id
 		"upstream_sub":        identity.Subject,
 		"upstream_iss":        identity.Issuer,
 		"preferred_username":  username,
@@ -72,11 +73,6 @@ func MintToken(cfg TokenConfig, claims map[string]interface{}, ks *KeySet) (stri
 
 	for k, v := range claims {
 		_ = tok.Set(k, v)
-	}
-
-	// Per spec: sub = device_external_id.
-	if extID, ok := claims["device_external_id"].(string); ok {
-		_ = tok.Set(jwt.SubjectKey, extID)
 	}
 
 	privJWK, err := jwk.FromRaw(ks.Private())
