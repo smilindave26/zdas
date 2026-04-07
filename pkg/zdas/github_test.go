@@ -12,7 +12,8 @@ import (
 
 // mockGitHubServer returns a test server that simulates GitHub's OAuth and API
 // endpoints. It accepts any code as valid and returns the provided user data.
-func mockGitHubServer(t *testing.T, user map[string]interface{}, orgs []map[string]interface{}) *httptest.Server {
+// emails is optional - when non-nil, it's served from /user/emails.
+func mockGitHubServer(t *testing.T, user map[string]interface{}, orgs []map[string]interface{}, emails []map[string]interface{}) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 
@@ -24,15 +25,6 @@ func mockGitHubServer(t *testing.T, user map[string]interface{}, orgs []map[stri
 		})
 	})
 
-	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(user)
-	})
-
 	mux.HandleFunc("/user/orgs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -40,6 +32,28 @@ func mockGitHubServer(t *testing.T, user map[string]interface{}, orgs []map[stri
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orgs)
+	})
+
+	mux.HandleFunc("/user/emails", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if emails != nil {
+			json.NewEncoder(w).Encode(emails)
+		} else {
+			json.NewEncoder(w).Encode([]interface{}{})
+		}
+	})
+
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(user)
 	})
 
 	server := httptest.NewServer(mux)
@@ -102,7 +116,7 @@ func TestGitHubProviderExchangeAndIdentify(t *testing.T) {
 		"name":  "John Smith",
 		"email": "j@example.com",
 	}
-	server := mockGitHubServer(t, user, nil)
+	server := mockGitHubServer(t, user, nil, nil)
 	p := newTestGitHubProvider(t, server, nil)
 
 	identity, err := p.ExchangeAndIdentify(context.Background(), "fake-code", "https://zdas/callback")
@@ -114,6 +128,9 @@ func TestGitHubProviderExchangeAndIdentify(t *testing.T) {
 	}
 	if identity.Username != "jsmith" {
 		t.Errorf("Username = %q, want jsmith", identity.Username)
+	}
+	if identity.Email != "j@example.com" {
+		t.Errorf("Email = %q, want j@example.com", identity.Email)
 	}
 	if identity.Issuer != "https://github.com" {
 		t.Errorf("Issuer = %q", identity.Issuer)
@@ -129,7 +146,7 @@ func TestGitHubProviderOrgCheckPass(t *testing.T) {
 		{"login": "mycompany"},
 		{"login": "other-org"},
 	}
-	server := mockGitHubServer(t, user, orgs)
+	server := mockGitHubServer(t, user, orgs, nil)
 	p := newTestGitHubProvider(t, server, []string{"mycompany"})
 
 	_, err := p.ExchangeAndIdentify(context.Background(), "code", "https://zdas/callback")
@@ -146,7 +163,7 @@ func TestGitHubProviderOrgCheckFail(t *testing.T) {
 	orgs := []map[string]interface{}{
 		{"login": "some-other-org"},
 	}
-	server := mockGitHubServer(t, user, orgs)
+	server := mockGitHubServer(t, user, orgs, nil)
 	p := newTestGitHubProvider(t, server, []string{"mycompany"})
 
 	_, err := p.ExchangeAndIdentify(context.Background(), "code", "https://zdas/callback")
@@ -162,7 +179,7 @@ func TestGitHubProviderFieldMapping(t *testing.T) {
 		"name":  "Full Name",
 		"email": "me@example.com",
 	}
-	server := mockGitHubServer(t, user, nil)
+	server := mockGitHubServer(t, user, nil, nil)
 
 	// Use name instead of login for username.
 	p := newTestGitHubProvider(t, server, nil)
@@ -175,6 +192,28 @@ func TestGitHubProviderFieldMapping(t *testing.T) {
 	}
 	if identity.Username != "Full Name" {
 		t.Errorf("Username = %q, want 'Full Name'", identity.Username)
+	}
+}
+
+func TestGitHubProviderEmailFromUserEmails(t *testing.T) {
+	// User profile has no public email - should fetch from /user/emails.
+	user := map[string]interface{}{
+		"id":    float64(55),
+		"login": "noemail",
+	}
+	emails := []map[string]interface{}{
+		{"email": "secondary@example.com", "primary": false, "verified": true},
+		{"email": "primary@example.com", "primary": true, "verified": true},
+	}
+	server := mockGitHubServer(t, user, nil, emails)
+	p := newTestGitHubProvider(t, server, nil)
+
+	identity, err := p.ExchangeAndIdentify(context.Background(), "code", "https://zdas/callback")
+	if err != nil {
+		t.Fatalf("ExchangeAndIdentify: %v", err)
+	}
+	if identity.Email != "primary@example.com" {
+		t.Errorf("Email = %q, want primary@example.com", identity.Email)
 	}
 }
 

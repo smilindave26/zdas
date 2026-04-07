@@ -201,7 +201,7 @@ func TestIntegrationGitHubFlow(t *testing.T) {
 		"login": "bobdev",
 		"name":  "Bob Developer",
 	}
-	ghServer := mockGitHubServer(t, githubUser, nil)
+	ghServer := mockGitHubServer(t, githubUser, nil, nil)
 
 	// Mock controller with no OIDC signers (only GitHub configured directly).
 	ctrlMux := http.NewServeMux()

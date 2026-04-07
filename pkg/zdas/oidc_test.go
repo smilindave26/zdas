@@ -173,6 +173,7 @@ func TestOIDCProviderExchangeAndIdentify(t *testing.T) {
 		"sub":                "user-42",
 		"preferred_username": "jsmith",
 		"name":               "John Smith",
+		"email":              "jsmith@example.com",
 	}
 	server, _ := mockOIDCServer(t, claims)
 
@@ -200,6 +201,9 @@ func TestOIDCProviderExchangeAndIdentify(t *testing.T) {
 	}
 	if identity.Username != "jsmith" {
 		t.Errorf("Username = %q, want jsmith", identity.Username)
+	}
+	if identity.Email != "jsmith@example.com" {
+		t.Errorf("Email = %q, want jsmith@example.com", identity.Email)
 	}
 	if identity.Issuer != server.URL {
 		t.Errorf("Issuer = %q", identity.Issuer)

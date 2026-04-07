@@ -31,6 +31,7 @@ type UpstreamProvider interface {
 // UpstreamIdentity is the normalized user identity from any upstream provider.
 type UpstreamIdentity struct {
 	Subject  string                 // unique user ID (OIDC sub, GitHub numeric ID, etc.)
+	Email    string                 // email address (OIDC email claim, GitHub primary verified email)
 	Username string                 // human-readable username (preferred_username, GitHub login, etc.)
 	Issuer   string                 // where this identity came from
 	Raw      map[string]interface{} // all upstream claims/fields for debugging or future use

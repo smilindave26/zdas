@@ -82,8 +82,16 @@ func (p *GitHubProvider) ExchangeAndIdentify(ctx context.Context, code, redirect
 	subject := extractField(user, p.userIDField)
 	username := extractField(user, p.usernameField)
 
+	// Try the user profile email first, then fetch /user/emails for the
+	// primary verified email (many GitHub users don't set a public email).
+	email, _ := user["email"].(string)
+	if email == "" {
+		email = p.fetchPrimaryEmail(ctx, accessToken)
+	}
+
 	return &UpstreamIdentity{
 		Subject:  subject,
+		Email:    email,
 		Username: username,
 		Issuer:   gitHubIssuer,
 		Raw:      user,
@@ -198,6 +206,42 @@ func (p *GitHubProvider) checkOrgs(ctx context.Context, accessToken string) erro
 		}
 	}
 	return fmt.Errorf("user not in allowed organization")
+}
+
+// fetchPrimaryEmail fetches the user's primary verified email from the GitHub
+// /user/emails endpoint. Returns empty string on any failure (best-effort).
+func (p *GitHubProvider) fetchPrimaryEmail(ctx context.Context, accessToken string) string {
+	emailsURL := strings.TrimSuffix(p.apiBaseURL, "/") + "/emails"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, emailsURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return ""
+	}
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return e.Email
+		}
+	}
+	return ""
 }
 
 // extractField extracts a string value from a JSON-decoded map. Numeric values

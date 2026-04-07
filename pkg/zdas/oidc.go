@@ -56,7 +56,7 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig) (*OIDCProvider
 	}
 	scopes := cfg.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{"openid", "profile"}
+		scopes = []string{"openid", "profile", "email"}
 	}
 
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
@@ -170,6 +170,7 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 
 	return &UpstreamIdentity{
 		Subject:  claims.Sub,
+		Email:    claims.Email,
 		Username: username,
 		Issuer:   p.issuer,
 		Raw:      raw,
