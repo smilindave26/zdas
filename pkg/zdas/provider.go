@@ -2,8 +2,17 @@ package zdas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+)
+
+var (
+	// ErrNoProviders is returned by Resolve when no upstream providers are registered.
+	ErrNoProviders = errors.New("no upstream providers available")
+	// ErrMultipleProviders is returned by Resolve when multiple providers are
+	// registered and no hint was given.
+	ErrMultipleProviders = errors.New("multiple idps available, selection required")
 )
 
 // UpstreamProvider abstracts the differences between OIDC and non-OIDC upstreams.
@@ -78,9 +87,9 @@ func (r *ProviderRegistry) Resolve(hint string) (UpstreamProvider, error) {
 			}
 		}
 		if len(r.providers) == 0 {
-			return nil, fmt.Errorf("no upstream providers available")
+			return nil, ErrNoProviders
 		}
-		return nil, fmt.Errorf("multiple idps available, selection required")
+		return nil, ErrMultipleProviders
 	}
 
 	// Match by name first.
@@ -103,17 +112,20 @@ func (r *ProviderRegistry) SetOIDCProviders(oidc []UpstreamProvider, configuredN
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Validate first - check for name collisions before mutating.
+	for _, p := range oidc {
+		if _, exists := configuredNames[p.Name()]; exists {
+			return fmt.Errorf("discovered oidc provider %q collides with configured provider", p.Name())
+		}
+	}
 	// Remove old OIDC entries (anything not in configuredNames).
 	for name := range r.providers {
 		if _, configured := configuredNames[name]; !configured {
 			delete(r.providers, name)
 		}
 	}
-	// Add new OIDC entries, checking for collisions with configured providers.
+	// Add new OIDC entries.
 	for _, p := range oidc {
-		if _, exists := configuredNames[p.Name()]; exists {
-			return fmt.Errorf("discovered oidc provider %q collides with configured provider", p.Name())
-		}
 		r.providers[p.Name()] = p
 	}
 	return nil

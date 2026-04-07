@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -161,15 +162,13 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	// Resolve upstream provider.
 	provider, err := h.registry.Resolve(idpHint)
 	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "multiple") {
-			// Show an IdP selection page so the user can choose.
+		switch {
+		case errors.Is(err, ErrMultipleProviders):
 			h.renderIDPSelector(w, r)
-			return
-		} else if strings.Contains(errMsg, "no upstream") {
+		case errors.Is(err, ErrNoProviders):
 			h.logger.Error("no upstream providers configured")
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "no upstream providers available")
-		} else {
+		default:
 			oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "unknown idp")
 		}
 		return
@@ -418,11 +417,7 @@ func (h *Handlers) handleToken(w http.ResponseWriter, r *http.Request) {
 // detour. The embedding application's picker page calls this with the pending
 // ID and the final claims.
 func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form body", http.StatusBadRequest)
-		return
-	}
-	pendingID := r.FormValue("pending_id")
+	pendingID := r.URL.Query().Get("pending_id")
 	if pendingID == "" {
 		http.Error(w, "pending_id is required", http.StatusBadRequest)
 		return

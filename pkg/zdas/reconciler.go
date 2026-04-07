@@ -28,7 +28,8 @@ type Reconciler struct {
 	mu      sync.Mutex
 	pending map[string]*PendingReconciliation
 
-	// Session token for the management API (zt-session).
+	// Session token for the management API (zt-session). Protected by sessMu.
+	sessMu         sync.RWMutex
 	sessionToken   string
 	sessionExpires time.Time
 
@@ -135,7 +136,10 @@ func (r *Reconciler) poll(ctx context.Context) {
 	}
 
 	// Ensure we have a valid session.
-	if time.Now().Add(5 * time.Minute).After(r.sessionExpires) {
+	r.sessMu.RLock()
+	expired := time.Now().Add(5 * time.Minute).After(r.sessionExpires)
+	r.sessMu.RUnlock()
+	if expired {
 		if err := r.refreshSession(ctx); err != nil {
 			r.logger.Warn("reconciler session refresh failed", "error", err)
 			return
@@ -205,7 +209,10 @@ func (r *Reconciler) findIdentity(ctx context.Context, externalID string) (id, h
 	if err != nil {
 		return "", "", fmt.Errorf("build identity request: %w", err)
 	}
-	req.Header.Set("zt-session", r.sessionToken)
+	r.sessMu.RLock()
+	token := r.sessionToken
+	r.sessMu.RUnlock()
+	req.Header.Set("zt-session", token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := r.client.Do(req)
@@ -252,7 +259,10 @@ func (r *Reconciler) renameIdentity(ctx context.Context, identityID, newName str
 	if err != nil {
 		return fmt.Errorf("build patch request: %w", err)
 	}
-	req.Header.Set("zt-session", r.sessionToken)
+	r.sessMu.RLock()
+	tok := r.sessionToken
+	r.sessMu.RUnlock()
+	req.Header.Set("zt-session", tok)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.client.Do(req)
@@ -272,8 +282,10 @@ func (r *Reconciler) refreshSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.sessMu.Lock()
 	r.sessionToken = session.Token
 	r.sessionExpires = session.ExpiresAt
+	r.sessMu.Unlock()
 	r.logger.Debug("reconciler session refreshed", "expires_at", session.ExpiresAt)
 	return nil
 }

@@ -2,6 +2,7 @@ package zdas
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -75,8 +76,8 @@ func TestRegistryResolveEmptyHintMultiple(t *testing.T) {
 	_ = r.Register(&stubProvider{name: "b", issuer: "https://b"})
 
 	_, err := r.Resolve("")
-	if err == nil || !strings.Contains(err.Error(), "selection required") {
-		t.Errorf("expected selection-required error, got %v", err)
+	if !errors.Is(err, ErrMultipleProviders) {
+		t.Errorf("expected ErrMultipleProviders, got %v", err)
 	}
 }
 
