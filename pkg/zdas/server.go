@@ -24,7 +24,11 @@ type Server struct {
 }
 
 // NewServer creates a fully-wired Server. Call Start to begin serving.
-func NewServer(cfg Config, logger *slog.Logger) (*Server, error) {
+func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error) {
+	var sopts serverOptions
+	for _, o := range opts {
+		o(&sopts)
+	}
 	keys, err := GenerateKeySet()
 	if err != nil {
 		return nil, fmt.Errorf("generate key set: %w", err)
@@ -67,7 +71,7 @@ func NewServer(cfg Config, logger *slog.Logger) (*Server, error) {
 		logger.Info("fallback reconciler enabled", "poll_interval", cfg.Fallback.PollInterval)
 	}
 
-	handlers := NewHandlers(cfg, keys, registry, store, disc, reconciler, logger)
+	handlers := NewHandlers(cfg, keys, registry, store, disc, reconciler, sopts.provisioner, logger)
 
 	return &Server{
 		cfg:        cfg,
@@ -101,8 +105,8 @@ func (h *Handler) Stop() {
 // NewHandler returns a Handler for embedding ZDAS in another application.
 // It performs initial discovery but does not start an HTTP server. The caller
 // is responsible for serving the returned handler and calling Stop on shutdown.
-func NewHandler(cfg Config, logger *slog.Logger) (*Handler, error) {
-	srv, err := NewServer(cfg, logger)
+func NewHandler(cfg Config, logger *slog.Logger, opts ...Option) (*Handler, error) {
+	srv, err := NewServer(cfg, logger, opts...)
 	if err != nil {
 		return nil, err
 	}

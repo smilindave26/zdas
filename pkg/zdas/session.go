@@ -34,15 +34,29 @@ type AuthCode struct {
 	Used                bool
 }
 
-// SessionStore is an in-memory store for auth sessions and authorization codes
-// with automatic expiration. It is safe for concurrent use.
+// PendingProvision holds state for an interactive provisioning detour.
+// Created when a provisioner returns a RedirectURL, consumed by
+// POST /provision/complete.
+type PendingProvision struct {
+	TunnelerRedirectURI         string
+	TunnelerState               string
+	TunnelerCodeChallenge       string
+	TunnelerCodeChallengeMethod string
+	IsFallback                  bool
+	CreatedAt                   time.Time
+}
+
+// SessionStore is an in-memory store for auth sessions, authorization codes,
+// and pending provisions with automatic expiration. It is safe for concurrent
+// use.
 type SessionStore struct {
 	sessionTTL time.Duration
 	codeTTL    time.Duration
 
-	mu       sync.Mutex
-	sessions map[string]*AuthSession
-	codes    map[string]*AuthCode
+	mu         sync.Mutex
+	sessions   map[string]*AuthSession
+	codes      map[string]*AuthCode
+	provisions map[string]*PendingProvision
 
 	stopCleanup chan struct{}
 }
@@ -55,6 +69,7 @@ func NewSessionStore(sessionTTL, codeTTL time.Duration) *SessionStore {
 		codeTTL:     codeTTL,
 		sessions:    make(map[string]*AuthSession),
 		codes:       make(map[string]*AuthCode),
+		provisions:  make(map[string]*PendingProvision),
 		stopCleanup: make(chan struct{}),
 	}
 	go s.cleanupLoop()
@@ -126,6 +141,36 @@ func (s *SessionStore) ConsumeCode(code string) *AuthCode {
 	return ac
 }
 
+// CreatePendingProvision stores state for an interactive provisioning detour
+// and returns the pending ID.
+func (s *SessionStore) CreatePendingProvision(pp *PendingProvision) (string, error) {
+	id, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	pp.CreatedAt = time.Now()
+	s.mu.Lock()
+	s.provisions[id] = pp
+	s.mu.Unlock()
+	return id, nil
+}
+
+// ConsumePendingProvision retrieves and deletes a pending provision. Returns
+// nil if expired or not found.
+func (s *SessionStore) ConsumePendingProvision(id string) *PendingProvision {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pp, ok := s.provisions[id]
+	if !ok {
+		return nil
+	}
+	delete(s.provisions, id)
+	if time.Since(pp.CreatedAt) > s.sessionTTL {
+		return nil
+	}
+	return pp
+}
+
 func (s *SessionStore) cleanupLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -151,6 +196,11 @@ func (s *SessionStore) cleanup() {
 	for code, ac := range s.codes {
 		if ac.Used || now.Sub(ac.CreatedAt) > s.codeTTL {
 			delete(s.codes, code)
+		}
+	}
+	for id, pp := range s.provisions {
+		if now.Sub(pp.CreatedAt) > s.sessionTTL {
+			delete(s.provisions, id)
 		}
 	}
 }

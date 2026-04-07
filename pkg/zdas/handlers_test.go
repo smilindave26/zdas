@@ -35,7 +35,7 @@ func setupHandlers(t *testing.T) (*Handlers, *stubProvider) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, nil, nil, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
 	return h, sp
 }
 
@@ -147,7 +147,7 @@ func TestHandleAuthorizeFallbackEnabled(t *testing.T) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, nil, nil, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
@@ -183,7 +183,7 @@ func TestHandleAuthorizeIDPSelector(t *testing.T) {
 		Claims:      defaultClaimsConfig(),
 		Token:       TokenConfig{Issuer: "https://zdas.example.com", Audience: "ziti-enrolltocert", Expiry: 5 * time.Minute},
 	}
-	h := NewHandlers(cfg, ks, reg, store, nil, nil, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
@@ -436,7 +436,7 @@ func TestCallbackToTokenFullFlow(t *testing.T) {
 			Expiry:   5 * time.Minute,
 		},
 	}
-	h := NewHandlers(cfg, ks, reg, store, nil, nil, slog.Default())
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
 	mux := h.Mux()
 
 	// Pre-create a session as if /authorize had run.

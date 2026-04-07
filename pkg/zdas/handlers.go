@@ -15,26 +15,28 @@ import (
 
 // Handlers groups the HTTP handler dependencies for the ZDAS endpoints.
 type Handlers struct {
-	cfg        Config
-	keys       *KeySet
-	registry   *ProviderRegistry
-	store      *SessionStore
-	discovery  *Discovery  // for cached network JWTs; may be nil in tests
-	reconciler *Reconciler // nil when fallback is disabled
-	logger     *slog.Logger
+	cfg         Config
+	keys        *KeySet
+	registry    *ProviderRegistry
+	store       *SessionStore
+	discovery   *Discovery              // for cached network JWTs; may be nil in tests
+	reconciler  *Reconciler             // nil when fallback is disabled
+	provisioner EnrollmentProvisioner   // nil uses built-in ComposeClaims
+	logger      *slog.Logger
 }
 
-// NewHandlers creates a Handlers with the given dependencies. discovery and
-// reconciler may be nil.
-func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, discovery *Discovery, reconciler *Reconciler, logger *slog.Logger) *Handlers {
+// NewHandlers creates a Handlers with the given dependencies. discovery,
+// reconciler, and provisioner may be nil.
+func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, discovery *Discovery, reconciler *Reconciler, provisioner EnrollmentProvisioner, logger *slog.Logger) *Handlers {
 	return &Handlers{
-		cfg:        cfg,
-		keys:       keys,
-		registry:   registry,
-		store:      store,
-		discovery:  discovery,
-		reconciler: reconciler,
-		logger:     logger,
+		cfg:         cfg,
+		keys:        keys,
+		registry:    registry,
+		store:       store,
+		discovery:   discovery,
+		reconciler:  reconciler,
+		provisioner: provisioner,
+		logger:      logger,
 	}
 }
 
@@ -47,6 +49,7 @@ func (h *Handlers) Mux() *http.ServeMux {
 	mux.HandleFunc("GET /authorize", h.handleAuthorize)
 	mux.HandleFunc("GET /callback", h.handleCallback)
 	mux.HandleFunc("POST /token", h.handleToken)
+	mux.HandleFunc("POST /provision/complete", h.handleProvisionComplete)
 	return mux
 }
 
@@ -275,7 +278,55 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := ComposeClaims(h.cfg.Claims, h.cfg.Fallback, identity, sess.DeviceInfo, sess.FallbackNonce)
+	var claims map[string]interface{}
+	if h.provisioner != nil {
+		req := ProvisionRequest{
+			Email:         identity.Email,
+			Name:          identity.Username,
+			Subject:       identity.Subject,
+			Provider:      sess.UpstreamProviderName,
+			IsFallback:    sess.FallbackNonce != "",
+			FallbackNonce: sess.FallbackNonce,
+		}
+		if sess.DeviceInfo != nil {
+			req.DeviceName = sess.DeviceInfo.DeviceName
+			req.Hostname = sess.DeviceInfo.Hostname
+			req.OS = sess.DeviceInfo.OS
+			req.Arch = sess.DeviceInfo.Arch
+			req.OSRelease = sess.DeviceInfo.OSRelease
+			req.OSVersion = sess.DeviceInfo.OSVersion
+		}
+		result, err := h.provisioner.Provision(r.Context(), req)
+		if err != nil {
+			h.logger.Error("provisioner failed", "error", err)
+			oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, "server_error", "provisioning failed")
+			return
+		}
+		if result.RedirectURL != "" && result.Claims == nil {
+			// Interactive provisioning - stash session state and redirect.
+			pendingID, err := h.store.CreatePendingProvision(&PendingProvision{
+				TunnelerRedirectURI:         sess.TunnelerRedirectURI,
+				TunnelerState:               sess.TunnelerState,
+				TunnelerCodeChallenge:       sess.TunnelerCodeChallenge,
+				TunnelerCodeChallengeMethod: sess.TunnelerCodeChallengeMethod,
+				IsFallback:                  sess.FallbackNonce != "",
+			})
+			if err != nil {
+				h.logger.Error("create pending provision", "error", err)
+				oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, "server_error", "internal error")
+				return
+			}
+			sep := "?"
+			if strings.Contains(result.RedirectURL, "?") {
+				sep = "&"
+			}
+			http.Redirect(w, r, result.RedirectURL+sep+"pending_id="+pendingID, http.StatusFound)
+			return
+		}
+		claims = result.Claims
+	} else {
+		claims = ComposeClaims(h.cfg.Claims, h.cfg.Fallback, identity, sess.DeviceInfo, sess.FallbackNonce)
+	}
 
 	// Track fallback enrollments for reconciliation.
 	if sess.FallbackNonce != "" && h.reconciler != nil {
@@ -361,6 +412,56 @@ func (h *Handlers) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleProvisionComplete resumes the flow after an interactive provisioning
+// detour. The embedding application's picker page calls this with the pending
+// ID and the final claims.
+func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "malformed form body", http.StatusBadRequest)
+		return
+	}
+	pendingID := r.FormValue("pending_id")
+	if pendingID == "" {
+		http.Error(w, "pending_id is required", http.StatusBadRequest)
+		return
+	}
+
+	pp := h.store.ConsumePendingProvision(pendingID)
+	if pp == nil {
+		http.Error(w, "pending provision not found or expired", http.StatusBadRequest)
+		return
+	}
+
+	// Read claims from the JSON request body.
+	var body struct {
+		Claims map[string]interface{} `json:"claims"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Claims == nil {
+		http.Error(w, "claims JSON body required", http.StatusBadRequest)
+		return
+	}
+
+	ac := &AuthCode{
+		Claims:              body.Claims,
+		RedirectURI:         pp.TunnelerRedirectURI,
+		CodeChallenge:       pp.TunnelerCodeChallenge,
+		CodeChallengeMethod: pp.TunnelerCodeChallengeMethod,
+		IsFallback:          pp.IsFallback,
+	}
+	zdasCode, err := h.store.CreateCode(ac)
+	if err != nil {
+		h.logger.Error("create auth code from provision", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	redir := pp.TunnelerRedirectURI + "?" + url.Values{
+		"code":  {zdasCode},
+		"state": {pp.TunnelerState},
+	}.Encode()
+	http.Redirect(w, r, redir, http.StatusFound)
 }
 
 // verifyPKCE validates the code_verifier against the stored code_challenge
