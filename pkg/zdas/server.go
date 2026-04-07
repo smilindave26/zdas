@@ -67,7 +67,7 @@ func NewServer(cfg Config, logger *slog.Logger) (*Server, error) {
 		logger.Info("fallback reconciler enabled", "poll_interval", cfg.Fallback.PollInterval)
 	}
 
-	handlers := NewHandlers(cfg, keys, registry, store, reconciler, logger)
+	handlers := NewHandlers(cfg, keys, registry, store, disc, reconciler, logger)
 
 	return &Server{
 		cfg:        cfg,

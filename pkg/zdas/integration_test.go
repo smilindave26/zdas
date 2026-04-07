@@ -406,7 +406,7 @@ func TestIntegrationFallbackFlow(t *testing.T) {
 	}
 
 	// No reconciler in this test (no identity file), but fallback is enabled.
-	h := NewHandlers(cfg, keys, registry, store, nil, slog.Default())
+	h := NewHandlers(cfg, keys, registry, store, nil, nil, slog.Default())
 	mux := h.Mux()
 
 	// Tunneler sends /authorize WITHOUT device_name.

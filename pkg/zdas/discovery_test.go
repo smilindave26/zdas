@@ -37,6 +37,10 @@ func mockControllerAndIDPs(t *testing.T, signers []signerEntry) (*httptest.Serve
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(signerResponse{Data: signers})
 	})
+	ctrlMux.HandleFunc("/network-jwts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"token":"mock-network-jwt"}]}`))
+	})
 	ctrlServer := httptest.NewServer(ctrlMux)
 	t.Cleanup(ctrlServer.Close)
 	return ctrlServer, idpServers
@@ -140,6 +144,32 @@ func TestDiscoveryNameCollisionWithConfigured(t *testing.T) {
 	err = d.RunOnce(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "collides") {
 		t.Errorf("expected collision error, got %v", err)
+	}
+}
+
+func TestDiscoveryCachesNetworkJWTs(t *testing.T) {
+	signers := []signerEntry{
+		{Name: "kc", ClientID: "c", EnrollToCertEnabled: true},
+	}
+	ctrl, _ := mockControllerAndIDPs(t, signers)
+
+	reg := NewProviderRegistry()
+	d, err := NewDiscovery(ControllerConfig{APIURL: ctrl.URL}, reg, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.NetworkJWTsBody() != nil {
+		t.Error("expected nil before first poll")
+	}
+	if err := d.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body := d.NetworkJWTsBody()
+	if body == nil {
+		t.Fatal("expected cached network JWTs after poll")
+	}
+	if !strings.Contains(string(body), "mock-network-jwt") {
+		t.Errorf("unexpected cached body: %s", body)
 	}
 }
 

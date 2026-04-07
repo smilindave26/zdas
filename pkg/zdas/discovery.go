@@ -22,9 +22,10 @@ type Discovery struct {
 	client         *http.Client
 	logger         *slog.Logger
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	stopped chan struct{}
+	mu              sync.Mutex
+	cancel          context.CancelFunc
+	stopped         chan struct{}
+	networkJWTsBody []byte // cached response from GET /network-jwts
 }
 
 // NewDiscovery creates a Discovery poller. configuredNames is the set of
@@ -116,10 +117,28 @@ type signerEntry struct {
 	EnrollToTokenEnabled bool  `json:"enrollToTokenEnabled"`
 }
 
+// NetworkJWTsBody returns the cached response from the controller's
+// /network-jwts endpoint, or nil if not yet fetched.
+func (d *Discovery) NetworkJWTsBody() []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.networkJWTsBody
+}
+
 func (d *Discovery) poll(ctx context.Context) error {
 	signers, err := d.fetchSigners(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Fetch network JWTs alongside signers. Failure is non-fatal - keep
+	// the stale cache and log a warning.
+	if body, err := d.fetchNetworkJWTs(ctx); err != nil {
+		d.logger.Warn("failed to fetch network JWTs, keeping stale cache", "error", err)
+	} else {
+		d.mu.Lock()
+		d.networkJWTsBody = body
+		d.mu.Unlock()
 	}
 
 	var providers []UpstreamProvider
@@ -192,4 +211,27 @@ func controllerClient(identityFilePath string) (*http.Client, error) {
 		return nil, err
 	}
 	return discoveryClientFromIdentity(id), nil
+}
+
+func (d *Discovery) fetchNetworkJWTs(ctx context.Context) ([]byte, error) {
+	reqURL := d.cfg.APIURL + "/network-jwts"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build network-jwts request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch network-jwts: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read network-jwts response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("network-jwts endpoint returned %d: %s", resp.StatusCode, body)
+	}
+	return body, nil
 }

@@ -19,18 +19,20 @@ type Handlers struct {
 	keys       *KeySet
 	registry   *ProviderRegistry
 	store      *SessionStore
+	discovery  *Discovery  // for cached network JWTs; may be nil in tests
 	reconciler *Reconciler // nil when fallback is disabled
 	logger     *slog.Logger
 }
 
-// NewHandlers creates a Handlers with the given dependencies. reconciler may
-// be nil when fallback is disabled.
-func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, reconciler *Reconciler, logger *slog.Logger) *Handlers {
+// NewHandlers creates a Handlers with the given dependencies. discovery and
+// reconciler may be nil.
+func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, discovery *Discovery, reconciler *Reconciler, logger *slog.Logger) *Handlers {
 	return &Handlers{
 		cfg:        cfg,
 		keys:       keys,
 		registry:   registry,
 		store:      store,
+		discovery:  discovery,
 		reconciler: reconciler,
 		logger:     logger,
 	}
@@ -41,6 +43,7 @@ func (h *Handlers) Mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", h.handleDiscovery)
 	mux.HandleFunc("GET /.well-known/jwks.json", h.handleJWKS)
+	mux.HandleFunc("GET /network-jwts", h.handleNetworkJWTs)
 	mux.HandleFunc("GET /authorize", h.handleAuthorize)
 	mux.HandleFunc("GET /callback", h.handleCallback)
 	mux.HandleFunc("POST /token", h.handleToken)
@@ -61,6 +64,20 @@ func (h *Handlers) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
+}
+
+func (h *Handlers) handleNetworkJWTs(w http.ResponseWriter, r *http.Request) {
+	if h.discovery == nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	body := h.discovery.NetworkJWTsBody()
+	if body == nil {
+		http.Error(w, "network JWTs not yet available", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
 }
 
 func (h *Handlers) handleJWKS(w http.ResponseWriter, r *http.Request) {
