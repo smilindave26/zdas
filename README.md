@@ -50,7 +50,7 @@ cp config.example.yaml config.yaml
 # Edit config.yaml: set external_url, controller.api_url
 
 # Register ZDAS as an ext-jwt-signer on the controller.
-# Use --enroll-to-cert, --enroll-to-token, or both depending on your enrollment type.
+# Include --enroll-to-cert, --enroll-to-token, or both.
 ziti edge create ext-jwt-signer zdas-signer \
   "https://das.example.com" \
   --jwks-endpoint "https://das.example.com/.well-known/jwks.json" \
@@ -58,6 +58,7 @@ ziti edge create ext-jwt-signer zdas-signer \
   --audience "ziti-enroll" \
   --client-id "ziti-enroll" \
   --enroll-to-cert \
+  --enroll-to-token \
   --enroll-name-claims-selector "device_identity_name" \
   --claims-property "device_external_id" \
   --use-external-id
