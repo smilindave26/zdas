@@ -58,7 +58,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Token.Issuer != cfg.ExternalURL {
 		t.Errorf("Token.Issuer should default to ExternalURL, got %q", cfg.Token.Issuer)
 	}
-	if cfg.Token.Audience != "ziti-enrolltocert" {
+	if cfg.Token.Audience != "ziti-enroll" {
 		t.Errorf("Token.Audience default = %q", cfg.Token.Audience)
 	}
 	if cfg.Token.Expiry != 5*time.Minute {

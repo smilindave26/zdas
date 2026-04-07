@@ -155,7 +155,7 @@ func (c *Config) applyDefaults() {
 		c.Token.Issuer = c.ExternalURL
 	}
 	if c.Token.Audience == "" {
-		c.Token.Audience = "ziti-enrolltocert"
+		c.Token.Audience = "ziti-enroll"
 	}
 	if c.Token.Expiry == 0 {
 		c.Token.Expiry = 5 * time.Minute

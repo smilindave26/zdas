@@ -2,7 +2,7 @@
 
 ZDAS is a lightweight Go service that solves a specific problem with [OpenZiti](https://openziti.io) device enrollment: standard OIDC providers issue tokens about *users*, not *devices*. If the same user enrolls from three devices, the tokens are identical and the second and third enrollments fail because the external ID collides.
 
-ZDAS sits between the tunneler and your upstream identity provider, delegates user authentication to the IdP, collects device info from the tunneler, and mints its own JWT that combines both. Each device gets a unique Ziti identity via `enroll-to-cert`.
+ZDAS sits between the tunneler and your upstream identity provider, delegates user authentication to the IdP, collects device info from the tunneler, and mints its own JWT that combines both. Each device gets a unique Ziti identity. Works with both `enroll-to-cert` and `enroll-to-token` enrollment types.
 
 ## How it works
 
@@ -21,7 +21,7 @@ Tunneler          ZDAS              Upstream IdP       Ziti Controller
    |                |                    |                   |
    |<-- ZDAS JWT ---|                    |                   |
    |                                                         |
-   |-- enroll-to-cert (Bearer ZDAS JWT) -------------------->|
+   |-- enroll (Bearer ZDAS JWT) ------------------------------>|
    |                                     validates via JWKS ->|
    |                                     creates identity     |
 ```
@@ -33,7 +33,7 @@ When multiple identity providers are available, ZDAS presents a selection page i
 ## Features
 
 - **Single binary, no database.** Ephemeral EC P-256 keys generated at startup, served via JWKS. In-memory session store with automatic cleanup.
-- **Controller-driven IdP discovery.** ZDAS polls the Ziti controller for ext-jwt-signers with `enrollToCertEnabled`, so adding a new IdP to the controller automatically makes it available through ZDAS.
+- **Controller-driven IdP discovery.** ZDAS polls the Ziti controller for ext-jwt-signers with enrollment enabled (cert or token), so adding a new IdP to the controller automatically makes it available through ZDAS.
 - **Non-OIDC provider support.** GitHub (and other OAuth-only providers) can be configured directly. Both discovered and configured providers are unified behind a common `UpstreamProvider` interface.
 - **Fallback for unmodified tunnelers.** Deploy ZDAS before updating any tunnelers. Unmodified tunnelers enroll with a temporary name, and ZDAS renames the identity via the management API after the tunneler connects and reports `envInfo`. Set `fallback.enabled: false` once all tunnelers are updated.
 - **Three TLS modes.** `acme` (automatic Let's Encrypt), `static` (bring your own cert), or `none` (behind a reverse proxy).
@@ -49,13 +49,14 @@ go build -o zdas ./cmd/zdas/
 cp config.example.yaml config.yaml
 # Edit config.yaml: set external_url, controller.api_url
 
-# Register ZDAS as an ext-jwt-signer on the controller
+# Register ZDAS as an ext-jwt-signer on the controller.
+# Use --enroll-to-cert, --enroll-to-token, or both depending on your enrollment type.
 ziti edge create ext-jwt-signer zdas-signer \
   "https://das.example.com" \
   --jwks-endpoint "https://das.example.com/.well-known/jwks.json" \
   --external-auth-url "https://das.example.com/authorize" \
-  --audience "ziti-enrolltocert" \
-  --client-id "ziti-enrolltocert" \
+  --audience "ziti-enroll" \
+  --client-id "ziti-enroll" \
   --enroll-to-cert \
   --enroll-name-claims-selector "device_identity_name" \
   --claims-property "device_external_id" \

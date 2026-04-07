@@ -58,7 +58,7 @@ claims:
 
 # Token settings
 token:
-  audience: "ziti-enrolltocert"
+  audience: "ziti-enroll"            # must match the audience on the ext-jwt-signer
   expiry: "5m"
 
 # Session settings

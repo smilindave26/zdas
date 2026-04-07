@@ -12,7 +12,8 @@ import (
 )
 
 // Discovery polls the Ziti controller's public ext-jwt-signers endpoint and
-// builds OIDCProvider instances from signers that have enrollToCertEnabled.
+// builds OIDCProvider instances from signers that have enrollment enabled
+// (enrollToCertEnabled or enrollToTokenEnabled).
 // It merges them into the ProviderRegistry alongside any configured providers.
 type Discovery struct {
 	cfg            ControllerConfig
@@ -107,11 +108,12 @@ type signerResponse struct {
 }
 
 type signerEntry struct {
-	Name              string `json:"name"`
-	Issuer            string `json:"issuer"`
-	ClientID          string `json:"clientId"`
-	ExternalAuthURL   string `json:"externalAuthUrl"`
-	EnrollToCertEnabled bool `json:"enrollToCertEnabled"`
+	Name                string `json:"name"`
+	Issuer              string `json:"issuer"`
+	ClientID            string `json:"clientId"`
+	ExternalAuthURL     string `json:"externalAuthUrl"`
+	EnrollToCertEnabled bool   `json:"enrollToCertEnabled"`
+	EnrollToTokenEnabled bool  `json:"enrollToTokenEnabled"`
 }
 
 func (d *Discovery) poll(ctx context.Context) error {
@@ -122,7 +124,7 @@ func (d *Discovery) poll(ctx context.Context) error {
 
 	var providers []UpstreamProvider
 	for _, s := range signers {
-		if !s.EnrollToCertEnabled {
+		if !s.EnrollToCertEnabled && !s.EnrollToTokenEnabled {
 			continue
 		}
 		if s.Issuer == d.cfg.SelfIssuer {
