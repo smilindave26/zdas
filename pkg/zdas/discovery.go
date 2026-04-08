@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -147,8 +148,15 @@ func (d *Discovery) poll(ctx context.Context) error {
 		if !s.EnrollToCertEnabled && !s.EnrollToTokenEnabled {
 			continue
 		}
-		if s.Issuer == d.cfg.SelfIssuer {
-			d.logger.Debug("excluding self from discovered signers", "issuer", s.Issuer)
+		// Exclude self. Match on issuer or externalAuthUrl (the public API
+		// may return an empty issuer for newly created signers).
+		if s.Issuer == d.cfg.SelfIssuer ||
+			(s.ExternalAuthURL != "" && strings.HasPrefix(s.ExternalAuthURL, d.cfg.SelfIssuer)) {
+			d.logger.Debug("excluding self from discovered signers", "name", s.Name, "issuer", s.Issuer)
+			continue
+		}
+		if s.Issuer == "" {
+			d.logger.Debug("skipping signer with empty issuer", "name", s.Name)
 			continue
 		}
 		p, err := NewOIDCProvider(ctx, OIDCProviderConfig{
