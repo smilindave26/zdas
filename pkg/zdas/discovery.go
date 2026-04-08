@@ -2,6 +2,7 @@ package zdas
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,7 +33,7 @@ type Discovery struct {
 // provider names that come from the ZDAS config (GitHub, etc.) and must not
 // collide with discovered signers.
 func NewDiscovery(cfg ControllerConfig, registry *ProviderRegistry, configuredNames map[string]struct{}, logger *slog.Logger) (*Discovery, error) {
-	client, err := controllerClient(cfg.IdentityFile)
+	client, err := controllerClient(cfg.APIURL, cfg.IdentityFile)
 	if err != nil {
 		return nil, err
 	}
@@ -198,19 +199,31 @@ func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
 	return result.Data, nil
 }
 
-// controllerClient builds an HTTP client for controller communication. If
-// identityFilePath is empty, it returns a plain client. If set, the CA bundle
-// is extracted from the Ziti identity JSON to verify the controller's TLS
-// certificate (no client cert - this is for the public client API).
-func controllerClient(identityFilePath string) (*http.Client, error) {
-	if identityFilePath == "" {
-		return &http.Client{Timeout: 15 * time.Second}, nil
+// controllerClient builds an HTTP client for controller communication. When
+// an identity file is provided, the CA is extracted from it. Otherwise, the CA
+// is bootstrapped from the controller's /.well-known/est/cacerts endpoint
+// (fetched with an insecure TLS client, then used to verify subsequent
+// requests). No client certificate is presented - this is for the public API.
+func controllerClient(apiURL, identityFilePath string) (*http.Client, error) {
+	if identityFilePath != "" {
+		id, err := loadIdentityFile(identityFilePath)
+		if err != nil {
+			return nil, err
+		}
+		return discoveryClientFromIdentity(id), nil
 	}
-	id, err := loadIdentityFile(identityFilePath)
+
+	// No identity file - bootstrap the CA from the controller.
+	pool, err := bootstrapCAPool(apiURL)
 	if err != nil {
 		return nil, err
 	}
-	return discoveryClientFromIdentity(id), nil
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: pool},
+		},
+	}, nil
 }
 
 func (d *Discovery) fetchNetworkJWTs(ctx context.Context) ([]byte, error) {

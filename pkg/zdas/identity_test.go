@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -195,6 +196,59 @@ func TestDiscoveryClientFromIdentity(t *testing.T) {
 	}
 	if client.Timeout != 15*time.Second {
 		t.Errorf("timeout = %v", client.Timeout)
+	}
+}
+
+func TestBootstrapCAPoolFromEST(t *testing.T) {
+	// Generate a self-signed CA cert to serve from the mock EST endpoint.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(1 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+
+	// Serve the DER cert as base64 (EST format).
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/est/cacerts" {
+			w.Header().Set("Content-Type", "application/pkcs7-mime")
+			encoded := base64.StdEncoding.EncodeToString(caDER)
+			w.Write([]byte(encoded))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	pool, err := bootstrapCAPool(server.URL)
+	if err != nil {
+		t.Fatalf("bootstrapCAPool: %v", err)
+	}
+	if pool == nil {
+		t.Fatal("pool is nil")
+	}
+	// Verify the pool contains the CA by checking that it can verify a cert
+	// signed by that CA.
+	caCert, _ := x509.ParseCertificate(caDER)
+	_, err = caCert.Verify(x509.VerifyOptions{Roots: pool})
+	if err != nil {
+		t.Errorf("pool should contain the bootstrapped CA: %v", err)
+	}
+}
+
+func TestBootstrapCAPoolFallsBackOnFailure(t *testing.T) {
+	// Unreachable controller - should fall back to system pool, not error.
+	pool, err := bootstrapCAPool("https://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("expected fallback, got error: %v", err)
+	}
+	if pool == nil {
+		t.Fatal("pool is nil")
 	}
 }
 

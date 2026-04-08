@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -98,6 +100,65 @@ func managementClientFromIdentity(id *parsedIdentity) *http.Client {
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}
+}
+
+// bootstrapCAPool fetches the controller's CA certificates from
+// /.well-known/est/cacerts using an insecure TLS client, then returns a cert
+// pool built from the response. This allows ZDAS to trust the controller's
+// TLS certificate without a pre-configured CA file or identity file. Falls
+// back to the system cert pool if the fetch fails.
+func bootstrapCAPool(controllerURL string) (*x509.CertPool, error) {
+	insecureClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	reqURL := strings.TrimSuffix(controllerURL, "/") + "/.well-known/est/cacerts"
+	resp, err := insecureClient.Get(reqURL)
+	if err != nil {
+		return systemOrEmptyPool(), nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return systemOrEmptyPool(), nil
+	}
+
+	// The response is base64-encoded DER (PKCS#7) per RFC 7030. Decode the
+	// base64 layer, then parse the DER certificates.
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(body)))
+	n, err := base64.StdEncoding.Decode(decoded, body)
+	if err != nil {
+		// Maybe it's PEM instead of base64 DER. Try PEM parsing.
+		pool := x509.NewCertPool()
+		if pool.AppendCertsFromPEM(body) {
+			return pool, nil
+		}
+		return systemOrEmptyPool(), nil
+	}
+	decoded = decoded[:n]
+
+	certs, err := x509.ParseCertificates(decoded)
+	if err != nil {
+		return systemOrEmptyPool(), nil
+	}
+
+	pool := x509.NewCertPool()
+	for _, cert := range certs {
+		pool.AddCert(cert)
+	}
+	return pool, nil
+}
+
+func systemOrEmptyPool() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	return pool
 }
 
 // apiSession holds the result of a POST /authenticate call.
