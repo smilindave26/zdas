@@ -8,6 +8,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+
+	"github.com/fullsailor/pkcs7"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -213,11 +215,18 @@ func TestBootstrapCAPoolFromEST(t *testing.T) {
 	}
 	caDER, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 
-	// Serve the DER cert as base64 (EST format).
+	// Wrap the cert in PKCS#7 and serve as base64 (EST format, matching what
+	// the Ziti controller returns).
+	caCert, _ := x509.ParseCertificate(caDER)
+	p7Data, err := pkcs7.DegenerateCertificate(caCert.Raw)
+	if err != nil {
+		t.Fatalf("create pkcs7: %v", err)
+	}
+
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/est/cacerts" {
 			w.Header().Set("Content-Type", "application/pkcs7-mime")
-			encoded := base64.StdEncoding.EncodeToString(caDER)
+			encoded := base64.StdEncoding.EncodeToString(p7Data)
 			w.Write([]byte(encoded))
 			return
 		}
@@ -232,9 +241,7 @@ func TestBootstrapCAPoolFromEST(t *testing.T) {
 	if pool == nil {
 		t.Fatal("pool is nil")
 	}
-	// Verify the pool contains the CA by checking that it can verify a cert
-	// signed by that CA.
-	caCert, _ := x509.ParseCertificate(caDER)
+	// Verify the pool contains the CA.
 	_, err = caCert.Verify(x509.VerifyOptions{Roots: pool})
 	if err != nil {
 		t.Errorf("pool should contain the bootstrapped CA: %v", err)

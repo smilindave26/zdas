@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/fullsailor/pkcs7"
 )
 
 // identityFile is the parsed content of a Ziti identity JSON file.
@@ -127,27 +129,25 @@ func bootstrapCAPool(controllerURL string) (*x509.CertPool, error) {
 		return systemOrEmptyPool(), nil
 	}
 
-	// The response is base64-encoded DER (PKCS#7) per RFC 7030. Decode the
-	// base64 layer, then parse the DER certificates.
-	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(body)))
-	n, err := base64.StdEncoding.Decode(decoded, body)
+	// The response is base64-encoded PKCS#7 (DER) per RFC 7030. Decode the
+	// base64 layer, then parse the PKCS#7 container to extract certificates.
+	certData, err := base64.StdEncoding.DecodeString(string(body))
 	if err != nil {
-		// Maybe it's PEM instead of base64 DER. Try PEM parsing.
+		// Maybe it's PEM instead of base64 PKCS#7. Try PEM parsing.
 		pool := x509.NewCertPool()
 		if pool.AppendCertsFromPEM(body) {
 			return pool, nil
 		}
 		return systemOrEmptyPool(), nil
 	}
-	decoded = decoded[:n]
 
-	certs, err := x509.ParseCertificates(decoded)
+	p7, err := pkcs7.Parse(certData)
 	if err != nil {
 		return systemOrEmptyPool(), nil
 	}
 
 	pool := x509.NewCertPool()
-	for _, cert := range certs {
+	for _, cert := range p7.Certificates {
 		pool.AddCert(cert)
 	}
 	return pool, nil
