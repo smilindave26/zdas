@@ -242,9 +242,6 @@ func (c *Config) Validate() error {
 		return errors.New("claims.name_template must contain both {username} and {device_name}")
 	}
 	if c.Fallback.Enabled {
-		if c.Controller.IdentityFile == "" {
-			return errors.New("fallback.enabled requires controller.identity_file for management API access")
-		}
 		if !strings.Contains(c.Fallback.TempNameTemplate, "{username}") {
 			return errors.New("fallback.temp_name_template must contain {username}")
 		}

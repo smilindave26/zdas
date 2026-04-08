@@ -215,15 +215,15 @@ func TestValidateNameTemplateMustContainPlaceholders(t *testing.T) {
 	}
 }
 
-func TestValidateFallbackRequiresIdentityFile(t *testing.T) {
+func TestValidateFallbackWithoutIdentityFile(t *testing.T) {
 	cfg := &Config{
 		ExternalURL: "https://das.example.com",
 		Controller:  ControllerConfig{APIURL: "https://c"},
 		Fallback:    FallbackConfig{Enabled: true},
 	}
 	cfg.applyDefaults()
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "identity_file") {
-		t.Errorf("expected identity_file error, got %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("fallback without identity_file should be valid, got %v", err)
 	}
 }
 

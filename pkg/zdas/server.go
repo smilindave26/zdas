@@ -69,6 +69,8 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error)
 		}
 		reconciler = NewReconciler(cfg.Fallback, cfg.Claims, mgmtClient, apiURL, logger)
 		logger.Info("fallback reconciler enabled", "poll_interval", cfg.Fallback.PollInterval)
+	} else if cfg.Fallback.Enabled {
+		logger.Info("fallback enrollment enabled without reconciler (no identity_file)")
 	}
 
 	handlers := NewHandlers(cfg, keys, registry, store, disc, reconciler, sopts.provisioner, logger)
