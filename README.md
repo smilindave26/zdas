@@ -39,6 +39,10 @@ When multiple identity providers are available, ZDAS presents a selection page i
 - **Three TLS modes.** `acme` (automatic Let's Encrypt), `static` (bring your own cert), or `none` (behind a reverse proxy).
 - **Embeddable.** `pkg/zdas` is an importable Go package. Mount the handler on your own mux or run it standalone.
 
+## Requirements
+
+- **OpenZiti controller v2.0+** - ZDAS relies on `enroll-to-cert` and `enroll-to-token`, which were added in v2.0. Against older controllers, discovery finds no eligible signers and auto-enrollment is not available.
+
 ## Quick start
 
 ```bash
