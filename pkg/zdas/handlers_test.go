@@ -211,6 +211,16 @@ func TestHandleAuthorizeIDPSelector(t *testing.T) {
 	if !strings.Contains(body, "idp=keycloak") || !strings.Contains(body, "idp=github") {
 		t.Error("expected idp param in selector links")
 	}
+	// Links must be relative so the browser resolves them against the
+	// current /authorize URL, regardless of how the embedding app mounts
+	// ZDAS (e.g., at /zdas). An absolute "/authorize?..." would 404 when
+	// ZDAS is mounted under a prefix via http.StripPrefix.
+	if !strings.Contains(body, `href="?`) {
+		t.Errorf("expected relative href=\"?...\" in selector, got: %s", body)
+	}
+	if strings.Contains(body, `href="/authorize`) {
+		t.Errorf("selector must not use absolute /authorize path; got: %s", body)
+	}
 }
 
 func TestHandleAuthorizeMissingPKCE(t *testing.T) {

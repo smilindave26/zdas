@@ -604,7 +604,11 @@ func (h *Handlers) renderIDPSelector(w http.ResponseWriter, r *http.Request) {
 			q[k] = v
 		}
 		q.Set("idp", name)
-		href := "/authorize?" + q.Encode()
+		// Relative URL: the browser resolves "?..." against the current
+		// page (/authorize), keeping the path and replacing only the
+		// query. This works regardless of how the embedding application
+		// mounts ZDAS (e.g., at /zdas via http.StripPrefix).
+		href := "?" + q.Encode()
 		links.WriteString(fmt.Sprintf(
 			`<a href="%s">%s</a>`,
 			html.EscapeString(href),
