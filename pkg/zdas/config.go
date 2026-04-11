@@ -34,6 +34,22 @@ type Config struct {
 	Claims      ClaimsConfig     `yaml:"claims"`
 	Token       TokenConfig      `yaml:"token"`
 	Session     SessionConfig    `yaml:"session"`
+
+	// IDPSelectorURL, when set, replaces ZDAS's built-in HTML IdP picker.
+	// When ZDAS would otherwise render its own picker (multiple providers
+	// registered, no idp query param on /authorize), it 302-redirects to
+	// this URL with the original /authorize query string preserved plus
+	// an additional `providers` parameter containing a comma-separated
+	// list of available IdP names.
+	//
+	// The embedding application is expected to render a branded picker
+	// page and direct the user back to <ExternalURL>/authorize with the
+	// original query string and an `idp=<name>` parameter selecting one
+	// of the listed providers. The redirect target must be on a host the
+	// embedding application controls; ZDAS does not validate or sanitize
+	// the URL beyond requiring it to be set at startup. Operators must
+	// not allow user input to influence this field.
+	IDPSelectorURL string `yaml:"idp_selector_url"`
 }
 
 // TLSConfig selects and configures the TLS serving mode.
@@ -259,6 +275,13 @@ func (c *Config) Validate() error {
 			return errors.New("fallback.temp_name_template must contain {username}")
 		}
 	}
+	if c.IDPSelectorURL != "" {
+		if !strings.HasPrefix(c.IDPSelectorURL, "http://") &&
+			!strings.HasPrefix(c.IDPSelectorURL, "https://") &&
+			!strings.HasPrefix(c.IDPSelectorURL, "/") {
+			return errors.New("idp_selector_url must be an http(s) URL or an absolute path")
+		}
+	}
 	return nil
 }
 
@@ -270,6 +293,7 @@ func (c *Config) Validate() error {
 func (c *Config) applyEnv() error {
 	setString(&c.Listen, "ZDAS_LISTEN")
 	setString(&c.ExternalURL, "ZDAS_EXTERNAL_URL")
+	setString(&c.IDPSelectorURL, "ZDAS_IDP_SELECTOR_URL")
 
 	setString(&c.TLS.Mode, "ZDAS_TLS_MODE")
 	setString(&c.TLS.CertFile, "ZDAS_TLS_CERT_FILE")

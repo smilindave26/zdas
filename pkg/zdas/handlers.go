@@ -164,6 +164,10 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrMultipleProviders):
+			if h.cfg.IDPSelectorURL != "" {
+				h.redirectToIDPSelector(w, r)
+				return
+			}
 			h.renderIDPSelector(w, r)
 		case errors.Is(err, ErrNoProviders):
 			h.logger.Error("no upstream providers configured")
@@ -583,6 +587,38 @@ func tokenError(w http.ResponseWriter, errCode, errDesc string) {
 		"error":             errCode,
 		"error_description": errDesc,
 	})
+}
+
+// redirectToIDPSelector hands picker rendering off to the embedding
+// application via cfg.IDPSelectorURL. It preserves the original /authorize
+// query string so the host app can echo it back to /authorize with an idp=
+// parameter added, and appends a `providers` query param listing the
+// available IdP names so the host app does not need to query ZDAS to know
+// what to render.
+func (h *Handlers) redirectToIDPSelector(w http.ResponseWriter, r *http.Request) {
+	names := h.registry.Names()
+	sort.Strings(names)
+
+	// Copy the original query string verbatim and add a providers list. We
+	// intentionally do NOT remove any existing params; the host app will
+	// round-trip them back to /authorize unchanged so that the
+	// tunneler-supplied state, PKCE, redirect_uri, device info, etc. are
+	// preserved through the picker round trip.
+	q := r.URL.Query()
+	q.Set("providers", strings.Join(names, ","))
+
+	target := h.cfg.IDPSelectorURL
+	sep := "?"
+	if strings.Contains(target, "?") {
+		sep = "&"
+	}
+	redirURL := target + sep + q.Encode()
+
+	h.logger.Info("redirecting to host app idp selector",
+		"url", h.cfg.IDPSelectorURL,
+		"providers", names,
+	)
+	http.Redirect(w, r, redirURL, http.StatusFound)
 }
 
 // renderIDPSelector shows an HTML page listing available identity providers

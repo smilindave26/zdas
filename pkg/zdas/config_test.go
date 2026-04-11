@@ -277,6 +277,53 @@ func TestValidateFallbackTempTemplateMustContainUsername(t *testing.T) {
 	}
 }
 
+func TestValidateIDPSelectorURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"empty ok", "", false},
+		{"https ok", "https://app.example.com/pick-idp", false},
+		{"http ok", "http://app.example.com/pick-idp", false},
+		{"absolute path ok", "/enroll/pick-idp", false},
+		{"with query ok", "https://app.example.com/pick-idp?source=zdas", false},
+		{"bare word rejected", "not-a-url", true},
+		{"ftp rejected", "ftp://nope", true},
+		{"relative path rejected", "enroll/pick", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				ExternalURL:    "https://das.example.com",
+				Controller:     ControllerConfig{APIURL: "https://c"},
+				IDPSelectorURL: tc.url,
+			}
+			cfg.applyDefaults()
+			err := cfg.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("expected error for %q, got nil", tc.url)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for %q: %v", tc.url, err)
+			}
+		})
+	}
+}
+
+func TestIDPSelectorURLEnvOverride(t *testing.T) {
+	path := writeTempConfig(t, minimalYAML)
+	t.Setenv("ZDAS_IDP_SELECTOR_URL", "https://app.example.com/pick-idp")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.IDPSelectorURL != "https://app.example.com/pick-idp" {
+		t.Errorf("IDPSelectorURL env override = %q", cfg.IDPSelectorURL)
+	}
+}
+
 func TestFallbackEnvOverride(t *testing.T) {
 	path := writeTempConfig(t, minimalYAML)
 	t.Setenv("ZDAS_FALLBACK_ENABLED", "true")

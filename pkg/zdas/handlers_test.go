@@ -223,6 +223,170 @@ func TestHandleAuthorizeIDPSelector(t *testing.T) {
 	}
 }
 
+// idpSelectorHandlers sets up Handlers with multiple providers and an
+// optional IDPSelectorURL. Returns the mux for sending requests.
+func idpSelectorHandlers(t *testing.T, selectorURL string) *http.ServeMux {
+	t.Helper()
+	ks, _ := GenerateKeySet()
+	reg := NewProviderRegistry()
+	_ = reg.Register(&stubProvider{name: "github", issuer: "https://github.com"})
+	_ = reg.Register(&stubProvider{name: "keycloak", issuer: "https://kc"})
+	store := NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	cfg := Config{
+		ExternalURL:    "https://zdas.example.com",
+		IDPSelectorURL: selectorURL,
+		Claims:         defaultClaimsConfig(),
+		Token:          TokenConfig{Issuer: "https://zdas.example.com", Audience: "ziti-enroll", Expiry: 5 * time.Minute},
+	}
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
+	return h.Mux()
+}
+
+func TestIDPSelectorURLUnsetRendersBuiltinPicker(t *testing.T) {
+	// Existing behavior: no IDPSelectorURL, multiple providers, no idp
+	// param -> built-in picker page rendered inline.
+	mux := idpSelectorHandlers(t, "")
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (built-in picker)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Select an identity provider") {
+		t.Error("expected built-in picker page to be rendered")
+	}
+}
+
+func TestIDPSelectorURLRedirectsWithProvidersAndQuery(t *testing.T) {
+	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp")
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	if loc.Scheme != "https" || loc.Host != "app.example.com" || loc.Path != "/pick-idp" {
+		t.Errorf("redirect target = %q", loc.String())
+	}
+	// Providers list must be sorted and comma-separated.
+	if got := loc.Query().Get("providers"); got != "github,keycloak" {
+		t.Errorf("providers = %q, want github,keycloak", got)
+	}
+	// Original query params must be preserved.
+	if loc.Query().Get("state") != "s1" {
+		t.Errorf("state = %q", loc.Query().Get("state"))
+	}
+	if loc.Query().Get("device_name") != "laptop" {
+		t.Errorf("device_name = %q", loc.Query().Get("device_name"))
+	}
+	if loc.Query().Get("redirect_uri") != "https://tunneler/cb" {
+		t.Errorf("redirect_uri = %q", loc.Query().Get("redirect_uri"))
+	}
+}
+
+func TestIDPSelectorURLSingleProviderSkipsPicker(t *testing.T) {
+	// With IDPSelectorURL set but only one provider registered, ZDAS must
+	// still bypass the picker entirely and go straight to the upstream.
+	ks, _ := GenerateKeySet()
+	reg := NewProviderRegistry()
+	_ = reg.Register(&stubProvider{name: "only-one", issuer: "https://only"})
+	store := NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	cfg := Config{
+		ExternalURL:    "https://zdas.example.com",
+		IDPSelectorURL: "https://app.example.com/pick-idp",
+		Claims:         defaultClaimsConfig(),
+		Token:          TokenConfig{Issuer: "https://zdas.example.com", Audience: "ziti-enroll", Expiry: 5 * time.Minute},
+	}
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
+	mux := h.Mux()
+
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	// Must redirect to the stub upstream, NOT the picker URL.
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://stub/only-one") {
+		t.Errorf("expected redirect to upstream, got %s", loc)
+	}
+}
+
+func TestIDPSelectorURLIDPSuppliedSkipsPicker(t *testing.T) {
+	// With IDPSelectorURL set, multiple providers, AND an idp hint,
+	// ZDAS must skip the picker and go straight to the chosen upstream.
+	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp")
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop&idp=github"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://stub/github") {
+		t.Errorf("expected redirect to stub github, got %s", loc)
+	}
+}
+
+func TestIDPSelectorURLAppendsToExistingQuery(t *testing.T) {
+	// The configured picker URL already has a query string. The original
+	// /authorize params must be appended with "&", producing exactly one "?".
+	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp?source=zdas")
+	_, challenge := generateTestPKCE(t)
+	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
+	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	location := w.Header().Get("Location")
+	if strings.Count(location, "?") != 1 {
+		t.Errorf("expected exactly one '?' in redirect, got %q", location)
+	}
+	loc, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	// Both the original picker query and our additions must be present.
+	if loc.Query().Get("source") != "zdas" {
+		t.Errorf("source param lost: %q", loc.Query().Get("source"))
+	}
+	if loc.Query().Get("providers") != "github,keycloak" {
+		t.Errorf("providers = %q", loc.Query().Get("providers"))
+	}
+	if loc.Query().Get("state") != "s1" {
+		t.Errorf("state = %q", loc.Query().Get("state"))
+	}
+}
+
 func TestHandleAuthorizeMissingPKCE(t *testing.T) {
 	h, _ := setupHandlers(t)
 	mux := h.Mux()
