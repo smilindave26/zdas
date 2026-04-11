@@ -11,15 +11,15 @@ import (
 // AuthSession holds state for an in-flight authorization flow between the
 // /authorize call and the /callback.
 type AuthSession struct {
-	TunnelerRedirectURI        string
-	TunnelerState              string
-	TunnelerCodeChallenge      string
+	TunnelerRedirectURI         string
+	TunnelerState               string
+	TunnelerCodeChallenge       string
 	TunnelerCodeChallengeMethod string
-	DeviceInfo                 *DeviceInfo // nil when fallback path (unmodified tunneler)
-	FallbackNonce              string     // populated only on fallback path
-	ZDASCodeVerifier           string     // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
-	UpstreamProviderName       string
-	CreatedAt                  time.Time
+	DeviceInfo                  *DeviceInfo // nil when fallback path (unmodified tunneler)
+	FallbackNonce               string      // populated only on fallback path
+	ZDASCodeVerifier            string      // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
+	UpstreamProviderName        string
+	CreatedAt                   time.Time
 }
 
 // AuthCode holds composed claims alongside the metadata needed to validate the

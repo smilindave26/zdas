@@ -53,12 +53,12 @@ func mockOIDCServer(t *testing.T, claims map[string]interface{}) (*httptest.Serv
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		baseURL := server.URL
 		doc := map[string]interface{}{
-			"issuer":                 baseURL,
-			"authorization_endpoint": baseURL + "/authorize",
-			"token_endpoint":         baseURL + "/token",
-			"jwks_uri":               baseURL + "/jwks",
-			"response_types_supported": []string{"code"},
-			"subject_types_supported":  []string{"public"},
+			"issuer":                                baseURL,
+			"authorization_endpoint":                baseURL + "/authorize",
+			"token_endpoint":                        baseURL + "/token",
+			"jwks_uri":                              baseURL + "/jwks",
+			"response_types_supported":              []string{"code"},
+			"subject_types_supported":               []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"ES256"},
 		}
 		w.Header().Set("Content-Type", "application/json")

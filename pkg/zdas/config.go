@@ -73,7 +73,7 @@ type FallbackConfig struct {
 // ZDAS (as opposed to discovered from the controller). Supports both OIDC and
 // non-OIDC types; field applicability depends on Type.
 type ProviderConfig struct {
-	Type         string `yaml:"type"`          // "github" | "oidc"
+	Type         string `yaml:"type"` // "github" | "oidc"
 	Name         string `yaml:"name"`
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"` // required for github, ignored for oidc (PKCE public client)

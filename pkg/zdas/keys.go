@@ -17,7 +17,7 @@ import (
 // become unverifiable, which is acceptable because enrollment tokens are
 // short-lived and single-use.
 type KeySet struct {
-	private *ecdsa.PrivateKey
+	private   *ecdsa.PrivateKey
 	publicJWK jwk.Key
 	kid       string
 }

@@ -8,8 +8,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
-
-	"github.com/fullsailor/pkcs7"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -20,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fullsailor/pkcs7"
 )
 
 // generateTestIdentityFile creates a temporary Ziti identity JSON file with a

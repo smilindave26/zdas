@@ -18,11 +18,11 @@ import (
 // (enrollToCertEnabled or enrollToTokenEnabled).
 // It merges them into the ProviderRegistry alongside any configured providers.
 type Discovery struct {
-	cfg            ControllerConfig
-	registry       *ProviderRegistry
+	cfg             ControllerConfig
+	registry        *ProviderRegistry
 	configuredNames map[string]struct{}
-	client         *http.Client
-	logger         *slog.Logger
+	client          *http.Client
+	logger          *slog.Logger
 
 	mu              sync.Mutex
 	cancel          context.CancelFunc
@@ -111,12 +111,12 @@ type signerResponse struct {
 }
 
 type signerEntry struct {
-	Name                string `json:"name"`
-	Issuer              string `json:"issuer"`
-	ClientID            string `json:"clientId"`
-	ExternalAuthURL     string `json:"externalAuthUrl"`
-	EnrollToCertEnabled bool   `json:"enrollToCertEnabled"`
-	EnrollToTokenEnabled bool  `json:"enrollToTokenEnabled"`
+	Name                 string `json:"name"`
+	Issuer               string `json:"issuer"`
+	ClientID             string `json:"clientId"`
+	ExternalAuthURL      string `json:"externalAuthUrl"`
+	EnrollToCertEnabled  bool   `json:"enrollToCertEnabled"`
+	EnrollToTokenEnabled bool   `json:"enrollToTokenEnabled"`
 }
 
 // NetworkJWTsBody returns the cached response from the controller's

@@ -11,9 +11,9 @@ import (
 )
 
 // mockControllerAndIDPs sets up:
-// - a mock Ziti controller that returns the given signer entries
-// - for each signer entry, a mock OIDC discovery server (if the issuer is
-//   left as "", it gets filled in automatically from the mock server URL)
+//   - a mock Ziti controller that returns the given signer entries
+//   - for each signer entry, a mock OIDC discovery server (if the issuer is
+//     left as "", it gets filled in automatically from the mock server URL)
 //
 // Returns the controller server and a list of OIDC mock servers.
 func mockControllerAndIDPs(t *testing.T, signers []signerEntry) (*httptest.Server, []*httptest.Server) {
