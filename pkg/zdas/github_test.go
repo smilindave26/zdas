@@ -116,7 +116,12 @@ func TestGitHubProviderExchangeAndIdentify(t *testing.T) {
 		"name":  "John Smith",
 		"email": "j@example.com",
 	}
-	server := mockGitHubServer(t, user, nil, nil)
+	// /user/emails must provide the primary+verified address - the /user
+	// profile email is no longer trusted.
+	emails := []map[string]interface{}{
+		{"email": "j@example.com", "primary": true, "verified": true},
+	}
+	server := mockGitHubServer(t, user, nil, emails)
 	p := newTestGitHubProvider(t, server, nil)
 
 	identity, err := p.ExchangeAndIdentify(context.Background(), "fake-code", "https://zdas/callback")
@@ -134,6 +139,33 @@ func TestGitHubProviderExchangeAndIdentify(t *testing.T) {
 	}
 	if identity.Issuer != "https://github.com" {
 		t.Errorf("Issuer = %q", identity.Issuer)
+	}
+}
+
+func TestGitHubProviderUnverifiedProfileEmailDropped(t *testing.T) {
+	// /user profile has a public email but /user/emails has no verified
+	// entries (or none match this address). The profile email must not
+	// leak through - Email should be empty.
+	user := map[string]interface{}{
+		"id":    float64(99),
+		"login": "attacker",
+		"email": "victim@example.com", // attacker set this publicly but never verified
+	}
+	emails := []map[string]interface{}{
+		{"email": "victim@example.com", "primary": true, "verified": false},
+	}
+	server := mockGitHubServer(t, user, nil, emails)
+	p := newTestGitHubProvider(t, server, nil)
+
+	identity, err := p.ExchangeAndIdentify(context.Background(), "fake-code", "https://zdas/callback")
+	if err != nil {
+		t.Fatalf("ExchangeAndIdentify: %v", err)
+	}
+	if identity.Email != "" {
+		t.Errorf("Email = %q, want empty (unverified profile email must not leak)", identity.Email)
+	}
+	if identity.Subject != "99" {
+		t.Errorf("Subject = %q", identity.Subject)
 	}
 }
 

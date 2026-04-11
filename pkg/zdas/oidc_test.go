@@ -174,6 +174,7 @@ func TestOIDCProviderExchangeAndIdentify(t *testing.T) {
 		"preferred_username": "jsmith",
 		"name":               "John Smith",
 		"email":              "jsmith@example.com",
+		"email_verified":     true,
 	}
 	server, _ := mockOIDCServer(t, claims)
 
@@ -207,6 +208,54 @@ func TestOIDCProviderExchangeAndIdentify(t *testing.T) {
 	}
 	if identity.Issuer != server.URL {
 		t.Errorf("Issuer = %q", identity.Issuer)
+	}
+}
+
+func TestOIDCProviderUnverifiedEmailDropped(t *testing.T) {
+	cases := []struct {
+		name   string
+		claims map[string]interface{}
+	}{
+		{
+			name: "email_verified false",
+			claims: map[string]interface{}{
+				"sub":            "u1",
+				"email":          "attacker@example.com",
+				"email_verified": false,
+			},
+		},
+		{
+			name: "email_verified missing",
+			claims: map[string]interface{}{
+				"sub":   "u1",
+				"email": "attacker@example.com",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := mockOIDCServer(t, tc.claims)
+			ctx := context.Background()
+			p, err := NewOIDCProvider(ctx, OIDCProviderConfig{
+				Name:     "test-idp",
+				Issuer:   server.URL,
+				ClientID: "test-client",
+			})
+			if err != nil {
+				t.Fatalf("NewOIDCProvider: %v", err)
+			}
+			identity, err := p.ExchangeAndIdentify(ctx, "fake-code", server.URL+"/callback")
+			if err != nil {
+				t.Fatalf("ExchangeAndIdentify: %v", err)
+			}
+			if identity.Email != "" {
+				t.Errorf("Email = %q, want empty (unverified should be dropped)", identity.Email)
+			}
+			// Other fields should still work.
+			if identity.Subject != "u1" {
+				t.Errorf("Subject = %q", identity.Subject)
+			}
+		})
 	}
 }
 

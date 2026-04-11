@@ -82,12 +82,10 @@ func (p *GitHubProvider) ExchangeAndIdentify(ctx context.Context, code, redirect
 	subject := extractField(user, p.userIDField)
 	username := extractField(user, p.usernameField)
 
-	// Try the user profile email first, then fetch /user/emails for the
-	// primary verified email (many GitHub users don't set a public email).
-	email, _ := user["email"].(string)
-	if email == "" {
-		email = p.fetchPrimaryEmail(ctx, accessToken)
-	}
+	// Always fetch /user/emails and use the primary verified address. The
+	// /user endpoint's "email" field may be an unverified public email, so
+	// we don't trust it even when present.
+	email := p.fetchPrimaryEmail(ctx, accessToken)
 
 	return &UpstreamIdentity{
 		Subject:  subject,

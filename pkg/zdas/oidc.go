@@ -152,6 +152,7 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 		PreferredUsername string `json:"preferred_username"`
 		Name              string `json:"name"`
 		Email             string `json:"email"`
+		EmailVerified     *bool  `json:"email_verified"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("extract claims from %s: %w", p.name, err)
@@ -168,9 +169,18 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 		username = claims.Sub
 	}
 
+	// Only surface the email if the upstream IdP asserts it is verified.
+	// A missing email_verified claim is treated as unverified (safe default).
+	email := ""
+	if claims.Email != "" {
+		if claims.EmailVerified != nil && *claims.EmailVerified {
+			email = claims.Email
+		}
+	}
+
 	return &UpstreamIdentity{
 		Subject:  claims.Sub,
-		Email:    claims.Email,
+		Email:    email,
 		Username: username,
 		Issuer:   p.issuer,
 		Raw:      raw,

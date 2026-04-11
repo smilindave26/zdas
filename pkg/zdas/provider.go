@@ -39,8 +39,14 @@ type UpstreamProvider interface {
 
 // UpstreamIdentity is the normalized user identity from any upstream provider.
 type UpstreamIdentity struct {
-	Subject  string                 // unique user ID (OIDC sub, GitHub numeric ID, etc.)
-	Email    string                 // email address (OIDC email claim, GitHub primary verified email)
+	Subject string // unique user ID (OIDC sub, GitHub numeric ID, etc.)
+	// Email is only populated when the upstream IdP asserts the address is
+	// verified. For OIDC, this means email_verified=true was present in the
+	// ID token. For GitHub, this means the address appeared on /user/emails
+	// with primary=true and verified=true. Embedders using email for user
+	// lookup can trust that an empty Email means no verified address was
+	// available; they should never trust an unverified address from Raw.
+	Email    string
 	Username string                 // human-readable username (preferred_username, GitHub login, etc.)
 	Issuer   string                 // where this identity came from
 	Raw      map[string]interface{} // all upstream claims/fields for debugging or future use
