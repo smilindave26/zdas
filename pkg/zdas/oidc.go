@@ -12,30 +12,34 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// OIDCProvider is an UpstreamProvider backed by a standard OIDC issuer.
-// It is created dynamically from ext-jwt-signers discovered on the Ziti
-// controller. It uses the signer's clientId as a public client with PKCE
-// (no client secret needed).
+// OIDCProvider is an UpstreamProvider backed by a standard OIDC issuer. It
+// can be created dynamically from ext-jwt-signers discovered on the Ziti
+// controller (public client + PKCE, no secret) or configured directly with
+// a client secret for IdPs that require a confidential client in the token
+// exchange (e.g. Google Web application OAuth clients). PKCE is always
+// applied when a verifier is threaded through the session.
 type OIDCProvider struct {
-	name     string
-	issuer   string
-	clientID string
-	authURL  string
-	tokenURL string
-	verifier *oidc.IDTokenVerifier
-	scopes   []string
+	name         string
+	issuer       string
+	clientID     string
+	clientSecret string // optional; set for confidential-client IdPs (e.g. Google Web)
+	authURL      string
+	tokenURL     string
+	verifier     *oidc.IDTokenVerifier
+	scopes       []string
 }
 
-// OIDCProviderConfig holds the data needed to construct an OIDCProvider,
-// typically sourced from a discovered ext-jwt-signer and its OIDC discovery
-// document.
+// OIDCProviderConfig holds the data needed to construct an OIDCProvider.
+// Sourced either from a discovered ext-jwt-signer (secret empty) or from
+// ProviderConfig for directly-configured OIDC providers.
 type OIDCProviderConfig struct {
-	Name     string
-	Issuer   string
-	ClientID string
-	AuthURL  string
-	TokenURL string
-	Scopes   []string
+	Name         string
+	Issuer       string
+	ClientID     string
+	ClientSecret string // optional; required by some IdPs (e.g. Google Web client) in the token exchange
+	AuthURL      string
+	TokenURL     string
+	Scopes       []string
 }
 
 // NewOIDCProvider creates an OIDCProvider from the given config. It creates an
@@ -62,13 +66,14 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig) (*OIDCProvider
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
 
 	return &OIDCProvider{
-		name:     cfg.Name,
-		issuer:   cfg.Issuer,
-		clientID: cfg.ClientID,
-		authURL:  authURL,
-		tokenURL: tokenURL,
-		verifier: verifier,
-		scopes:   scopes,
+		name:         cfg.Name,
+		issuer:       cfg.Issuer,
+		clientID:     cfg.ClientID,
+		clientSecret: cfg.ClientSecret,
+		authURL:      authURL,
+		tokenURL:     tokenURL,
+		verifier:     verifier,
+		scopes:       scopes,
 	}, nil
 }
 
@@ -127,6 +132,9 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 		"code":         {code},
 		"redirect_uri": {redirectURI},
 		"client_id":    {p.clientID},
+	}
+	if p.clientSecret != "" {
+		params.Set("client_secret", p.clientSecret)
 	}
 	if codeVerifier != "" {
 		params.Set("code_verifier", codeVerifier)

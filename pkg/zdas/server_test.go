@@ -81,6 +81,74 @@ func TestNewServerRegistersConfiguredOIDCProvider(t *testing.T) {
 	}
 }
 
+// TestNewServerRegistersConfiguredOIDCProviderWithSecret verifies that a
+// configured OIDC provider with a ClientSecret set (e.g. Google Web client)
+// lands in the registry with the secret threaded through to the provider.
+func TestNewServerRegistersConfiguredOIDCProviderWithSecret(t *testing.T) {
+	idpServer, _ := mockOIDCServer(t, map[string]interface{}{"sub": "test"})
+
+	ctrlMux := http.NewServeMux()
+	ctrlMux.HandleFunc("/edge/client/v1/external-jwt-signers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(signerResponse{Data: []signerEntry{}})
+	})
+	ctrlServer := httptest.NewServer(ctrlMux)
+	t.Cleanup(ctrlServer.Close)
+
+	cfg := Config{
+		Listen:      ":0",
+		ExternalURL: "https://zdas.test",
+		TLS:         TLSConfig{Mode: TLSModeNone},
+		Controller: ControllerConfig{
+			APIURL:       ctrlServer.URL,
+			PollInterval: 0,
+			SelfIssuer:   "https://zdas.test",
+		},
+		Providers: []ProviderConfig{
+			{
+				Type:          ProviderTypeOIDC,
+				Name:          "google",
+				ClientID:      "gcid",
+				ClientSecret:  "gcsecret",
+				OIDCIssuerURL: idpServer.URL,
+			},
+		},
+		Claims: ClaimsConfig{
+			UsernameClaim:     "preferred_username",
+			NameTemplate:      "{username}-{device_name}",
+			IdentityNameClaim: "device_identity_name",
+			ExternalIDClaim:   "device_external_id",
+		},
+		Token: TokenConfig{
+			Issuer:   "https://zdas.test",
+			Audience: "ziti-enroll",
+			Expiry:   5 * time.Minute,
+		},
+		Session: SessionConfig{
+			Timeout:    10 * time.Minute,
+			CodeExpiry: 60 * time.Second,
+		},
+	}
+
+	srv, err := NewServer(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { srv.store.Stop() })
+
+	got, err := srv.registry.Resolve("google")
+	if err != nil {
+		t.Fatalf("expected google in registry: %v", err)
+	}
+	oidcProv, ok := got.(*OIDCProvider)
+	if !ok {
+		t.Fatalf("expected *OIDCProvider, got %T", got)
+	}
+	if oidcProv.clientSecret != "gcsecret" {
+		t.Errorf("clientSecret = %q, want gcsecret", oidcProv.clientSecret)
+	}
+}
+
 // TestNewServerOIDCProviderDiscoveryFailure verifies that a configured OIDC
 // provider with an unreachable issuer fails NewServer at startup (fail-fast).
 func TestNewServerOIDCProviderDiscoveryFailure(t *testing.T) {

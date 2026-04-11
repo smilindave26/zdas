@@ -51,6 +51,7 @@ fallback:
 #   - type: "oidc"
 #     name: "google"
 #     client_id: "abc.apps.googleusercontent.com"
+#     client_secret: "GOCSPX-..."       # required for Google "Web application" clients; optional for other OIDC IdPs
 #     oidc_issuer_url: "https://accounts.google.com"
 #     # scopes: ["openid", "profile", "email"]   # optional, this is the default
 

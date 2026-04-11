@@ -61,10 +61,11 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 			// hang startup indefinitely.
 			discoCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			oidcProv, err := NewOIDCProvider(discoCtx, OIDCProviderConfig{
-				Name:     pc.Name,
-				Issuer:   pc.OIDCIssuerURL,
-				ClientID: pc.ClientID,
-				Scopes:   pc.Scopes,
+				Name:         pc.Name,
+				Issuer:       pc.OIDCIssuerURL,
+				ClientID:     pc.ClientID,
+				ClientSecret: pc.ClientSecret,
+				Scopes:       pc.Scopes,
 			})
 			cancel()
 			if err != nil {

@@ -1,18 +1,18 @@
 package zdas
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
-
-	"context"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
@@ -283,6 +283,100 @@ func TestOIDCProviderUsernameFallback(t *testing.T) {
 	}
 	if identity.Username != "Fallback Name" {
 		t.Errorf("Username = %q, want 'Fallback Name'", identity.Username)
+	}
+}
+
+func TestNewOIDCProviderStoresClientSecret(t *testing.T) {
+	server, _ := mockOIDCServer(t, map[string]interface{}{"sub": "u1"})
+
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:         "confidential",
+		Issuer:       server.URL,
+		ClientID:     "client-id",
+		ClientSecret: "shhh",
+	})
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+	if p.clientSecret != "shhh" {
+		t.Errorf("clientSecret = %q, want %q", p.clientSecret, "shhh")
+	}
+}
+
+// withRecordingTokenExchange swaps the package-level oidcTokenExchange
+// function for the duration of a test. The recorded params are returned via
+// the pointer so the test can assert on what ExchangeAndIdentify submitted.
+func withRecordingTokenExchange(t *testing.T, idTokenClaims map[string]interface{}) *url.Values {
+	t.Helper()
+	var recorded url.Values
+
+	// Generate a signed id_token the verifier will accept. Reuse the mock
+	// OIDC server's signing helpers by spinning up an instance and capturing
+	// its key; simpler to just stub via an httptest server and exchange
+	// through it. We take the simpler approach: stub oidcTokenExchange
+	// entirely but also need a verifier that accepts the token.
+	// For these tests we only care about the request params, not the
+	// verifier output, so have the stub return an error after recording.
+	orig := oidcTokenExchange
+	oidcTokenExchange = func(_ context.Context, _ string, params url.Values) (map[string]interface{}, error) {
+		recorded = params
+		// Return an error so the test short-circuits after the recording.
+		// The test asserts on recorded params, not on the identity result.
+		return nil, errTestRecorded
+	}
+	t.Cleanup(func() { oidcTokenExchange = orig })
+	_ = idTokenClaims
+	return &recorded
+}
+
+var errTestRecorded = fmt.Errorf("test-recorded")
+
+func TestOIDCTokenExchangeIncludesClientSecret(t *testing.T) {
+	server, _ := mockOIDCServer(t, map[string]interface{}{"sub": "u1"})
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:         "confidential",
+		Issuer:       server.URL,
+		ClientID:     "client-id",
+		ClientSecret: "topsecret",
+	})
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+
+	recorded := withRecordingTokenExchange(t, nil)
+	_, _ = p.ExchangeAndIdentifyWithPKCE(context.Background(), "code", "https://zdas/cb", "verifier")
+
+	if got := recorded.Get("client_secret"); got != "topsecret" {
+		t.Errorf("client_secret = %q, want topsecret", got)
+	}
+	if got := recorded.Get("code_verifier"); got != "verifier" {
+		t.Errorf("code_verifier = %q, want verifier (PKCE must still apply)", got)
+	}
+	if got := recorded.Get("client_id"); got != "client-id" {
+		t.Errorf("client_id = %q", got)
+	}
+}
+
+func TestOIDCTokenExchangeOmitsClientSecretWhenUnset(t *testing.T) {
+	server, _ := mockOIDCServer(t, map[string]interface{}{"sub": "u1"})
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:     "public",
+		Issuer:   server.URL,
+		ClientID: "client-id",
+		// ClientSecret deliberately empty.
+	})
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+
+	recorded := withRecordingTokenExchange(t, nil)
+	_, _ = p.ExchangeAndIdentifyWithPKCE(context.Background(), "code", "https://zdas/cb", "verifier")
+
+	if _, present := (*recorded)["client_secret"]; present {
+		t.Errorf("client_secret should not be in params, got %q", recorded.Get("client_secret"))
+	}
+	if got := recorded.Get("code_verifier"); got != "verifier" {
+		t.Errorf("code_verifier = %q", got)
 	}
 }
 

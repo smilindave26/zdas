@@ -76,7 +76,7 @@ type ProviderConfig struct {
 	Type         string `yaml:"type"` // "github" | "oidc"
 	Name         string `yaml:"name"`
 	ClientID     string `yaml:"client_id"`
-	ClientSecret string `yaml:"client_secret"` // required for github, ignored for oidc (PKCE public client)
+	ClientSecret string `yaml:"client_secret"` // required for github; optional for oidc (set when the IdP requires a confidential client, e.g. Google Web application)
 
 	// OIDC-specific fields.
 	OIDCIssuerURL string   `yaml:"oidc_issuer_url"` // base URL for OIDC discovery
