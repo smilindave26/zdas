@@ -462,14 +462,51 @@ func (h *Handlers) handleProvisionerError(w http.ResponseWriter, r *http.Request
 	oidcErrorRedirect(w, r, redirectURI, state, "server_error", "provisioning failed")
 }
 
+// provisionCompleteError mirrors ProvisionError as a JSON-tagged value type
+// for the /provision/complete request body.
+type provisionCompleteError struct {
+	Code        string `json:"code"`
+	Description string `json:"description"`
+}
+
+// provisionCompleteBody is the JSON body accepted by /provision/complete.
+// Exactly one of Claims or Error must be set. Setting Claims completes the
+// flow successfully and mints an enrollment code. Setting Error performs an
+// OIDC error redirect to the tunneler instead.
+type provisionCompleteBody struct {
+	Claims map[string]any          `json:"claims,omitempty"`
+	Error  *provisionCompleteError `json:"error,omitempty"`
+}
+
 // handleProvisionComplete resumes the flow after an interactive provisioning
 // detour. The embedding application's picker page calls this with the pending
-// ID and the final claims.
+// ID and either the final claims (success) or a structured error (rejection).
+// Either way, the pending provision is consumed and the browser is redirected
+// back to the tunneler.
 func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Request) {
 	pendingID := r.URL.Query().Get("pending_id")
 	if pendingID == "" {
 		http.Error(w, "pending_id is required", http.StatusBadRequest)
 		return
+	}
+
+	// Decode and validate the body BEFORE consuming the pending provision,
+	// so a malformed request doesn't burn the pending state and force the
+	// user to restart the entire enrollment flow.
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var body provisionCompleteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if body.Claims == nil && body.Error == nil {
+		http.Error(w, `provision complete body must contain either "claims" or "error"`, http.StatusBadRequest)
+		return
+	}
+	if body.Claims != nil && body.Error != nil {
+		h.logger.Warn("provision complete: both claims and error set, preferring error",
+			"pending_id", pendingID)
+		body.Claims = nil
 	}
 
 	pp := h.store.ConsumePendingProvision(pendingID)
@@ -478,12 +515,19 @@ func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Read claims from the JSON request body.
-	var body struct {
-		Claims map[string]interface{} `json:"claims"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Claims == nil {
-		http.Error(w, "claims JSON body required", http.StatusBadRequest)
+	if body.Error != nil {
+		code := body.Error.Code
+		desc := body.Error.Description
+		if !isValidProvisionErrorCode(code) {
+			h.logger.Warn("provision complete: invalid error code from embedding app, falling back to server_error",
+				"code", code)
+			code = "server_error"
+			desc = "provisioning failed"
+		}
+		h.logger.Info("provision complete: provisioner rejected after picker",
+			"code", code,
+			"description", desc)
+		oidcErrorRedirect(w, r, pp.TunnelerRedirectURI, pp.TunnelerState, code, sanitizeErrorDescription(desc))
 		return
 	}
 

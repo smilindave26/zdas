@@ -381,6 +381,197 @@ func TestProvisionerInvalidErrorCodeFallsBack(t *testing.T) {
 	}
 }
 
+// setupProvisionComplete creates a Handlers with a pre-loaded pending provision
+// and returns the mux, the pending_id, and the store (so tests can verify
+// consumption).
+func setupProvisionComplete(t *testing.T) (mux *http.ServeMux, pendingID string, store *SessionStore) {
+	t.Helper()
+	ks, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	reg := NewProviderRegistry()
+	store = NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	cfg := Config{
+		ExternalURL: "https://zdas.test",
+		Claims:      defaultClaimsConfig(),
+		Token:       TokenConfig{Issuer: "https://zdas.test", Audience: "ziti-enroll", Expiry: 5 * time.Minute},
+	}
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, nil, slog.Default())
+	mux = h.Mux()
+
+	pendingID, err = store.CreatePendingProvision(&PendingProvision{
+		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerState:               "tstate",
+		TunnelerCodeChallenge:       "challenge",
+		TunnelerCodeChallengeMethod: "S256",
+	})
+	if err != nil {
+		t.Fatalf("CreatePendingProvision: %v", err)
+	}
+	return mux, pendingID, store
+}
+
+func postProvisionComplete(t *testing.T, mux *http.ServeMux, pendingID string, body interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/provision/complete?pending_id="+pendingID, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
+func TestProvisionCompleteErrorPath(t *testing.T) {
+	cases := []struct {
+		name     string
+		code     string
+		desc     string
+		wantCode string
+	}{
+		{"access_denied", "access_denied", "no membership", "access_denied"},
+		{"server_error", "server_error", "internal", "server_error"},
+		{"invalid_request", "invalid_request", "bad input", "invalid_request"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux, pendingID, _ := setupProvisionComplete(t)
+			w := postProvisionComplete(t, mux, pendingID, map[string]interface{}{
+				"error": map[string]string{"code": tc.code, "description": tc.desc},
+			})
+
+			if w.Code != http.StatusFound {
+				t.Fatalf("status = %d, want 302; body=%s", w.Code, w.Body.String())
+			}
+			loc, _ := url.Parse(w.Header().Get("Location"))
+			if loc.Query().Get("error") != tc.wantCode {
+				t.Errorf("error = %q, want %q", loc.Query().Get("error"), tc.wantCode)
+			}
+			if loc.Query().Get("error_description") != tc.desc {
+				t.Errorf("error_description = %q, want %q", loc.Query().Get("error_description"), tc.desc)
+			}
+			if loc.Query().Get("state") != "tstate" {
+				t.Errorf("state = %q, want tstate", loc.Query().Get("state"))
+			}
+		})
+	}
+}
+
+func TestProvisionCompleteInvalidErrorCodeFallsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"unknown code", map[string]any{"error": map[string]string{"code": "totally_made_up", "description": "embedder secret"}}},
+		{"empty code", map[string]any{"error": map[string]string{"code": "", "description": "embedder secret"}}},
+		{"wrong case", map[string]any{"error": map[string]string{"code": "ACCESS_DENIED", "description": "embedder secret"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux, pendingID, _ := setupProvisionComplete(t)
+			w := postProvisionComplete(t, mux, pendingID, tc.body)
+
+			loc, _ := url.Parse(w.Header().Get("Location"))
+			if loc.Query().Get("error") != "server_error" {
+				t.Errorf("error = %q, want server_error", loc.Query().Get("error"))
+			}
+			// Description must be replaced with the generic fallback so we
+			// don't leak embedder-supplied text alongside a bogus code.
+			if loc.Query().Get("error_description") != "provisioning failed" {
+				t.Errorf("error_description = %q, want %q",
+					loc.Query().Get("error_description"), "provisioning failed")
+			}
+		})
+	}
+}
+
+func TestProvisionCompleteMalformedJSONPreservesPending(t *testing.T) {
+	mux, pendingID, store := setupProvisionComplete(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/provision/complete?pending_id="+pendingID,
+		strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+
+	// Pending should still be available - the malformed body must not have
+	// burned the one-shot session.
+	if pp := store.ConsumePendingProvision(pendingID); pp == nil {
+		t.Error("pending provision was consumed by a malformed request")
+	}
+}
+
+func TestProvisionCompleteErrorPathConsumesPending(t *testing.T) {
+	mux, pendingID, store := setupProvisionComplete(t)
+	postProvisionComplete(t, mux, pendingID, map[string]interface{}{
+		"error": map[string]string{"code": "access_denied", "description": "no"},
+	})
+
+	// Pending provision should be gone - second call returns 400.
+	if pp := store.ConsumePendingProvision(pendingID); pp != nil {
+		t.Error("pending provision was not consumed")
+	}
+	w := postProvisionComplete(t, mux, pendingID, map[string]interface{}{
+		"error": map[string]string{"code": "access_denied", "description": "no"},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("replay status = %d, want 400", w.Code)
+	}
+}
+
+func TestProvisionCompleteEmptyBody(t *testing.T) {
+	mux, pendingID, _ := setupProvisionComplete(t)
+	w := postProvisionComplete(t, mux, pendingID, map[string]interface{}{})
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestProvisionCompleteBothClaimsAndErrorPrefersError(t *testing.T) {
+	mux, pendingID, _ := setupProvisionComplete(t)
+	w := postProvisionComplete(t, mux, pendingID, map[string]interface{}{
+		"claims": map[string]interface{}{"device_external_id": "x"},
+		"error":  map[string]string{"code": "access_denied", "description": "denied"},
+	})
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "access_denied" {
+		t.Errorf("expected error path to win, got error=%q code=%q",
+			loc.Query().Get("error"), loc.Query().Get("code"))
+	}
+}
+
+func TestProvisionCompleteErrorDescriptionSanitized(t *testing.T) {
+	mux, pendingID, _ := setupProvisionComplete(t)
+	// Include a double-quote and backslash, both disallowed by RFC 6749
+	// 4.1.2.1, plus newline/tab control chars. None should survive.
+	w := postProvisionComplete(t, mux, pendingID, map[string]interface{}{
+		"error": map[string]string{
+			"code":        "access_denied",
+			"description": "say \"hi\"\nback\\slash\there",
+		},
+	})
+
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	got := loc.Query().Get("error_description")
+	if strings.ContainsAny(got, "\n\t\\\"") {
+		t.Errorf("description not sanitized: %q", got)
+	}
+	// And legal characters should survive.
+	if !strings.Contains(got, "say") || !strings.Contains(got, "hi") {
+		t.Errorf("legal characters lost: %q", got)
+	}
+}
+
 func TestProvisionCompleteExpired(t *testing.T) {
 	ks, _ := GenerateKeySet()
 	reg := NewProviderRegistry()
