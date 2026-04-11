@@ -13,7 +13,40 @@ type EnrollmentProvisioner interface {
 	// Return ProvisionResult with RedirectURL set to redirect the browser
 	// to an application-hosted page (e.g., network picker) for interactive
 	// selection before completing the flow.
+	//
+	// To reject the request with a structured error that ZDAS will surface
+	// to the tunneler, return a *ProvisionError. Plain errors are treated
+	// as server failures and surfaced as OIDC server_error.
 	Provision(ctx context.Context, req ProvisionRequest) (*ProvisionResult, error)
+}
+
+// ProvisionError is a structured error that an EnrollmentProvisioner can
+// return to control the OIDC error code and description surfaced to the
+// tunneler. Code must be one of the standard OIDC 2.0 error codes:
+// "access_denied", "invalid_request", or "server_error". Description is
+// rendered to the user via the OIDC error_description query parameter and
+// should be short, human-readable, and actionable.
+type ProvisionError struct {
+	Code        string
+	Description string
+}
+
+func (e *ProvisionError) Error() string {
+	if e.Description != "" {
+		return e.Description
+	}
+	return e.Code
+}
+
+// isValidProvisionErrorCode reports whether code is one of the OIDC error
+// codes ZDAS will pass through to the tunneler. Anything else is treated as
+// a misbehaving provisioner and falls back to "server_error".
+func isValidProvisionErrorCode(code string) bool {
+	switch code {
+	case "access_denied", "invalid_request", "server_error":
+		return true
+	}
+	return false
 }
 
 // ProvisionRequest contains everything the provisioner needs to make decisions

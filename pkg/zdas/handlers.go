@@ -20,9 +20,9 @@ type Handlers struct {
 	keys        *KeySet
 	registry    *ProviderRegistry
 	store       *SessionStore
-	discovery   *Discovery              // for cached network JWTs; may be nil in tests
-	reconciler  *Reconciler             // nil when fallback is disabled
-	provisioner EnrollmentProvisioner   // nil uses built-in ComposeClaims
+	discovery   *Discovery            // for cached network JWTs; may be nil in tests
+	reconciler  *Reconciler           // nil when fallback is disabled
+	provisioner EnrollmentProvisioner // nil uses built-in ComposeClaims
 	logger      *slog.Logger
 }
 
@@ -57,14 +57,14 @@ func (h *Handlers) Mux() *http.ServeMux {
 func (h *Handlers) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	ext := h.cfg.ExternalURL
 	doc := map[string]interface{}{
-		"issuer":                 ext,
-		"authorization_endpoint": ext + "/authorize",
-		"token_endpoint":         ext + "/token",
-		"jwks_uri":               ext + "/.well-known/jwks.json",
-		"response_types_supported":               []string{"code"},
-		"subject_types_supported":                []string{"public"},
-		"id_token_signing_alg_values_supported":  []string{"ES256"},
-		"grant_types_supported":                  []string{"authorization_code"},
+		"issuer":                                ext,
+		"authorization_endpoint":                ext + "/authorize",
+		"token_endpoint":                        ext + "/token",
+		"jwks_uri":                              ext + "/.well-known/jwks.json",
+		"response_types_supported":              []string{"code"},
+		"subject_types_supported":               []string{"public"},
+		"id_token_signing_alg_values_supported": []string{"ES256"},
+		"grant_types_supported":                 []string{"authorization_code"},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
@@ -297,8 +297,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := h.provisioner.Provision(r.Context(), req)
 		if err != nil {
-			h.logger.Error("provisioner failed", "error", err)
-			oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, "server_error", "provisioning failed")
+			h.handleProvisionerError(w, r, err, sess.TunnelerRedirectURI, sess.TunnelerState, sess.UpstreamProviderName)
 			return
 		}
 		if result.RedirectURL != "" && result.Claims == nil {
@@ -411,6 +410,31 @@ func (h *Handlers) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleProvisionerError translates an error from the EnrollmentProvisioner
+// into an OIDC error redirect. A *ProvisionError with a valid OIDC code is
+// passed through to the tunneler. Anything else (plain error or invalid code)
+// becomes server_error with a generic description.
+func (h *Handlers) handleProvisionerError(w http.ResponseWriter, r *http.Request, err error, redirectURI, state, providerName string) {
+	var pe *ProvisionError
+	if errors.As(err, &pe) {
+		if !isValidProvisionErrorCode(pe.Code) {
+			h.logger.Warn("provisioner returned invalid error code, falling back to server_error",
+				"code", pe.Code, "provider", providerName)
+			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "provisioning failed")
+			return
+		}
+		h.logger.Info("provisioner rejected request",
+			"code", pe.Code,
+			"description", pe.Description,
+			"provider", providerName,
+		)
+		oidcErrorRedirect(w, r, redirectURI, state, pe.Code, pe.Description)
+		return
+	}
+	h.logger.Error("provisioner failed", "error", err, "provider", providerName)
+	oidcErrorRedirect(w, r, redirectURI, state, "server_error", "provisioning failed")
 }
 
 // handleProvisionComplete resumes the flow after an interactive provisioning
