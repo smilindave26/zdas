@@ -35,7 +35,10 @@ fallback:
   temp_name_template: "{username}-pending-{nonce_short}"
   timeout: "1h"                               # stop tracking after this long
 
-# Non-OIDC upstream providers (optional)
+# Directly-configured upstream providers (optional). Most OIDC providers are
+# discovered from the controller automatically; use this section for providers
+# that aren't registered as ext-jwt-signers (e.g., GitHub) or for embedding
+# scenarios where the controller doesn't know about them.
 # providers:
 #   - type: "github"
 #     name: "github"
@@ -45,6 +48,11 @@ fallback:
 #     user_id_field: "id"
 #     # allowed_orgs:
 #     #   - "mycompany"
+#   - type: "oidc"
+#     name: "google"
+#     client_id: "abc.apps.googleusercontent.com"
+#     oidc_issuer_url: "https://accounts.google.com"
+#     # scopes: ["openid", "profile", "email"]   # optional, this is the default
 
 # Claim composition
 # Updated tunnelers send device info as query params on /authorize:

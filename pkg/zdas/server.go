@@ -38,8 +38,10 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error)
 	registry := NewProviderRegistry()
 	store := NewSessionStore(cfg.Session.Timeout, cfg.Session.CodeExpiry)
 
-	// Register configured (non-OIDC) providers.
+	// Register directly-configured providers (those defined in ZDAS config
+	// rather than discovered from the controller).
 	configuredNames := make(map[string]struct{}, len(cfg.Providers))
+	ctx := context.Background()
 	for _, pc := range cfg.Providers {
 		configuredNames[pc.Name] = struct{}{}
 		switch pc.Type {
@@ -47,8 +49,21 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error)
 			if err := registry.Register(NewGitHubProvider(pc)); err != nil {
 				return nil, fmt.Errorf("register provider %q: %w", pc.Name, err)
 			}
-			logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
+		case ProviderTypeOIDC:
+			oidcProv, err := NewOIDCProvider(ctx, OIDCProviderConfig{
+				Name:     pc.Name,
+				Issuer:   pc.OIDCIssuerURL,
+				ClientID: pc.ClientID,
+				Scopes:   pc.Scopes,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("register oidc provider %q: %w", pc.Name, err)
+			}
+			if err := registry.Register(oidcProv); err != nil {
+				return nil, fmt.Errorf("register provider %q: %w", pc.Name, err)
+			}
 		}
+		logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
 	}
 
 	disc, err := NewDiscovery(cfg.Controller, registry, configuredNames, logger)

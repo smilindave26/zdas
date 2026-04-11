@@ -20,6 +20,7 @@ const (
 // Provider types.
 const (
 	ProviderTypeGitHub = "github"
+	ProviderTypeOIDC   = "oidc"
 )
 
 // Config is the top-level ZDAS configuration.
@@ -68,12 +69,20 @@ type FallbackConfig struct {
 	Timeout          time.Duration `yaml:"timeout"` // how long to track a fallback identity before giving up
 }
 
-// ProviderConfig is the config for a non-OIDC upstream provider (e.g. GitHub).
+// ProviderConfig is the config for an upstream provider configured directly in
+// ZDAS (as opposed to discovered from the controller). Supports both OIDC and
+// non-OIDC types; field applicability depends on Type.
 type ProviderConfig struct {
-	Type          string   `yaml:"type"`
-	Name          string   `yaml:"name"`
-	ClientID      string   `yaml:"client_id"`
-	ClientSecret  string   `yaml:"client_secret"`
+	Type         string `yaml:"type"`          // "github" | "oidc"
+	Name         string `yaml:"name"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"` // required for github, ignored for oidc (PKCE public client)
+
+	// OIDC-specific fields.
+	OIDCIssuerURL string   `yaml:"oidc_issuer_url"` // base URL for OIDC discovery
+	Scopes        []string `yaml:"scopes"`          // optional, defaults to openid+profile+email
+
+	// GitHub-specific fields.
 	UsernameField string   `yaml:"username_field"`
 	UserIDField   string   `yaml:"user_id_field"`
 	AllowedOrgs   []string `yaml:"allowed_orgs"`
@@ -228,6 +237,10 @@ func (c *Config) Validate() error {
 		case ProviderTypeGitHub:
 			if p.ClientID == "" || p.ClientSecret == "" {
 				return fmt.Errorf("providers[%d] (%s): client_id and client_secret are required for github", i, p.Name)
+			}
+		case ProviderTypeOIDC:
+			if p.ClientID == "" || p.OIDCIssuerURL == "" {
+				return fmt.Errorf("providers[%d] (%s): client_id and oidc_issuer_url are required for oidc", i, p.Name)
 			}
 		case "":
 			return fmt.Errorf("providers[%d] (%s): type is required", i, p.Name)

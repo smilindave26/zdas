@@ -203,6 +203,44 @@ func TestValidateGithubRequiresSecret(t *testing.T) {
 	}
 }
 
+func TestValidateOIDCRequiresIssuerAndClientID(t *testing.T) {
+	cases := []struct {
+		name string
+		p    ProviderConfig
+	}{
+		{"missing both", ProviderConfig{Type: "oidc", Name: "kc"}},
+		{"missing issuer", ProviderConfig{Type: "oidc", Name: "kc", ClientID: "c"}},
+		{"missing client_id", ProviderConfig{Type: "oidc", Name: "kc", OIDCIssuerURL: "https://kc"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				ExternalURL: "https://das.example.com",
+				Controller:  ControllerConfig{APIURL: "https://c"},
+				Providers:   []ProviderConfig{tc.p},
+			}
+			cfg.applyDefaults()
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "oidc_issuer_url") {
+				t.Errorf("expected oidc_issuer_url error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateOIDCAccepts(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Providers: []ProviderConfig{
+			{Type: "oidc", Name: "kc", ClientID: "c", OIDCIssuerURL: "https://kc.example.com"},
+		},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valid oidc config rejected: %v", err)
+	}
+}
+
 func TestValidateNameTemplateMustContainPlaceholders(t *testing.T) {
 	cfg := &Config{
 		ExternalURL: "https://das.example.com",
