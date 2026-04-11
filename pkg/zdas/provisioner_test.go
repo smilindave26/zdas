@@ -322,6 +322,46 @@ func TestProvisionerPlainErrorBecomesServerError(t *testing.T) {
 	}
 }
 
+func TestSanitizeErrorDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "hello world", "hello world"},
+		{"newlines stripped", "line one\nline two", "line one line two"},
+		{"control chars stripped", "tab\there", "tab here"},
+		{"backslash stripped", `back\slash`, "back slash"},
+		{"quote stripped", `say "hi"`, "say  hi "},
+		{"truncates long input", strings.Repeat("a", 300), strings.Repeat("a", 200)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeErrorDescription(tc.in)
+			if got != tc.want {
+				t.Errorf("sanitizeErrorDescription(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProvisionerStructuredErrorSanitizes(t *testing.T) {
+	pe := &ProvisionError{
+		Code:        "access_denied",
+		Description: "no\nnewlines\there",
+	}
+	w := runProvisionerCallback(t, &failingProvisioner{err: pe})
+
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	got := loc.Query().Get("error_description")
+	if strings.ContainsAny(got, "\n\t") {
+		t.Errorf("error_description still contains control chars: %q", got)
+	}
+	if got != "no newlines here" {
+		t.Errorf("error_description = %q", got)
+	}
+}
+
 func TestProvisionerInvalidErrorCodeFallsBack(t *testing.T) {
 	cases := []string{"", "totally_made_up", "INVALID_REQUEST"}
 	for _, badCode := range cases {

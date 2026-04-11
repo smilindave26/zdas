@@ -24,7 +24,7 @@ type Server struct {
 }
 
 // NewServer creates a fully-wired Server. Call Start to begin serving.
-func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error) {
+func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, retErr error) {
 	var sopts serverOptions
 	for _, o := range opts {
 		o(&sopts)
@@ -37,11 +37,17 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error)
 
 	registry := NewProviderRegistry()
 	store := NewSessionStore(cfg.Session.Timeout, cfg.Session.CodeExpiry)
+	// Stop the session store cleanup goroutine if NewServer fails partway
+	// through; on success the returned Server owns it.
+	defer func() {
+		if retErr != nil {
+			store.Stop()
+		}
+	}()
 
 	// Register directly-configured providers (those defined in ZDAS config
 	// rather than discovered from the controller).
 	configuredNames := make(map[string]struct{}, len(cfg.Providers))
-	ctx := context.Background()
 	for _, pc := range cfg.Providers {
 		configuredNames[pc.Name] = struct{}{}
 		switch pc.Type {
@@ -49,21 +55,28 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (*Server, error)
 			if err := registry.Register(NewGitHubProvider(pc)); err != nil {
 				return nil, fmt.Errorf("register provider %q: %w", pc.Name, err)
 			}
+			logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
 		case ProviderTypeOIDC:
-			oidcProv, err := NewOIDCProvider(ctx, OIDCProviderConfig{
+			// Bound the OIDC discovery call so an unresponsive IdP can't
+			// hang startup indefinitely.
+			discoCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			oidcProv, err := NewOIDCProvider(discoCtx, OIDCProviderConfig{
 				Name:     pc.Name,
 				Issuer:   pc.OIDCIssuerURL,
 				ClientID: pc.ClientID,
 				Scopes:   pc.Scopes,
 			})
+			cancel()
 			if err != nil {
 				return nil, fmt.Errorf("register oidc provider %q: %w", pc.Name, err)
 			}
 			if err := registry.Register(oidcProv); err != nil {
 				return nil, fmt.Errorf("register provider %q: %w", pc.Name, err)
 			}
+			logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
+		default:
+			return nil, fmt.Errorf("provider %q: unknown type %q (config not validated?)", pc.Name, pc.Type)
 		}
-		logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
 	}
 
 	disc, err := NewDiscovery(cfg.Controller, registry, configuredNames, logger)

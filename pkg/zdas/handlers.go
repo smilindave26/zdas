@@ -412,6 +412,31 @@ func (h *Handlers) handleToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// sanitizeErrorDescription enforces RFC 6749 section 4.1.2.1 character class
+// for OIDC error_description: printable ASCII excluding " and \, with newlines
+// and other control characters replaced by spaces. Truncates to 200 chars to
+// keep redirect URLs reasonable.
+func sanitizeErrorDescription(s string) string {
+	const maxLen = 200
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Allowed: %x20-21, %x23-5B, %x5D-7E (RFC 6749 §4.1.2.1).
+		switch {
+		case c == 0x20 || c == 0x21,
+			c >= 0x23 && c <= 0x5B,
+			c >= 0x5D && c <= 0x7E:
+			out = append(out, c)
+		default:
+			out = append(out, ' ')
+		}
+	}
+	return string(out)
+}
+
 // handleProvisionerError translates an error from the EnrollmentProvisioner
 // into an OIDC error redirect. A *ProvisionError with a valid OIDC code is
 // passed through to the tunneler. Anything else (plain error or invalid code)
@@ -430,7 +455,7 @@ func (h *Handlers) handleProvisionerError(w http.ResponseWriter, r *http.Request
 			"description", pe.Description,
 			"provider", providerName,
 		)
-		oidcErrorRedirect(w, r, redirectURI, state, pe.Code, pe.Description)
+		oidcErrorRedirect(w, r, redirectURI, state, pe.Code, sanitizeErrorDescription(pe.Description))
 		return
 	}
 	h.logger.Error("provisioner failed", "error", err, "provider", providerName)

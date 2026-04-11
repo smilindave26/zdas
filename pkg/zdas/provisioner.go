@@ -22,10 +22,12 @@ type EnrollmentProvisioner interface {
 
 // ProvisionError is a structured error that an EnrollmentProvisioner can
 // return to control the OIDC error code and description surfaced to the
-// tunneler. Code must be one of the standard OIDC 2.0 error codes:
-// "access_denied", "invalid_request", or "server_error". Description is
-// rendered to the user via the OIDC error_description query parameter and
-// should be short, human-readable, and actionable.
+// tunneler. Code must be one of the ZDAS-supported OIDC error codes:
+// "access_denied", "invalid_request", or "server_error". Anything else is
+// rejected and replaced with "server_error". Description is rendered to the
+// user via the OIDC error_description query parameter; it should be short,
+// human-readable, and actionable. ZDAS truncates very long descriptions and
+// strips control characters before sending.
 type ProvisionError struct {
 	Code        string
 	Description string
