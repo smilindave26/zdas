@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fullsailor/pkcs7"
+	"go.mozilla.org/pkcs7"
 )
 
 // generateTestIdentityFile creates a temporary Ziti identity JSON file with a

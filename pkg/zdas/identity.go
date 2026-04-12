@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fullsailor/pkcs7"
+	"go.mozilla.org/pkcs7"
 )
 
 // identityFile is the parsed content of a Ziti identity JSON file.
