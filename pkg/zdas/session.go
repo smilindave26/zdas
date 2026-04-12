@@ -213,9 +213,11 @@ func randomID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// generateShortNonce returns a 6-character hex nonce for fallback enrollments.
+// generateShortNonce returns a 16-character hex nonce for fallback enrollments.
+// 8 bytes of entropy pushes the birthday-collision bound to ~4 billion, which
+// is safe for any realistic volume of concurrent fallback enrollments.
 func generateShortNonce() (string, error) {
-	b := make([]byte, 3) // 3 bytes = 6 hex chars
+	b := make([]byte, 8) // 8 bytes = 16 hex chars
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}

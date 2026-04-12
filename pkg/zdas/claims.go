@@ -66,14 +66,17 @@ func expandFallbackTemplate(tmpl, username, nonce string) string {
 func MintToken(cfg TokenConfig, claims map[string]interface{}, ks *KeySet) (string, error) {
 	now := time.Now()
 	tok := jwt.New()
+
+	// Set custom claims first, then override with standard claims so that
+	// neither the provisioner hook nor /provision/complete can tamper with
+	// iss, aud, iat, or exp.
+	for k, v := range claims {
+		_ = tok.Set(k, v)
+	}
 	_ = tok.Set(jwt.IssuerKey, cfg.Issuer)
 	_ = tok.Set(jwt.AudienceKey, cfg.Audience)
 	_ = tok.Set(jwt.IssuedAtKey, now)
 	_ = tok.Set(jwt.ExpirationKey, now.Add(cfg.Expiry))
-
-	for k, v := range claims {
-		_ = tok.Set(k, v)
-	}
 
 	privJWK, err := jwk.FromRaw(ks.Private())
 	if err != nil {
