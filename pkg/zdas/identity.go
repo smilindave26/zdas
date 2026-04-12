@@ -59,9 +59,14 @@ func loadIdentityFile(path string) (*parsedIdentity, error) {
 		return nil, fmt.Errorf("parse identity cert/key: %w", err)
 	}
 
-	var caPool *x509.CertPool
-	if caPEM != "" {
+	// Start from the system CA pool so controllers with publicly-trusted
+	// certs (e.g. NetFoundry production) still verify. The Ziti CA from
+	// the identity file is added on top.
+	caPool, err := x509.SystemCertPool()
+	if err != nil {
 		caPool = x509.NewCertPool()
+	}
+	if caPEM != "" {
 		if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
 			return nil, fmt.Errorf("no valid certificates in identity file CA")
 		}
