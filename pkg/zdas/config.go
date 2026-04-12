@@ -50,6 +50,14 @@ type Config struct {
 	// the URL beyond requiring it to be set at startup. Operators must
 	// not allow user input to influence this field.
 	IDPSelectorURL string `yaml:"idp_selector_url"`
+
+	// AllowedRedirectURIs restricts which redirect_uri values the /authorize
+	// endpoint will accept. Each entry is a prefix: a request's redirect_uri
+	// must start with one of these strings. When empty, any http(s) URL is
+	// accepted (permissive, for development or when PKCE is the sole defense).
+	// In production, set this to the expected tunneler callback patterns, e.g.
+	// ["http://localhost:", "http://127.0.0.1:"].
+	AllowedRedirectURIs []string `yaml:"allowed_redirect_uris"`
 }
 
 // TLSConfig selects and configures the TLS serving mode.

@@ -2,6 +2,7 @@ package zdas
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -119,6 +120,19 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "redirect_uri must be a valid http(s) URL", http.StatusBadRequest)
 		return
 	}
+	if len(h.cfg.AllowedRedirectURIs) > 0 {
+		allowed := false
+		for _, prefix := range h.cfg.AllowedRedirectURIs {
+			if strings.HasPrefix(redirectURI, prefix) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.Error(w, "redirect_uri is not in the allowed list", http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Validate remaining required parameters.
 	if codeChallenge == "" || codeChallengeMethod == "" {
@@ -151,11 +165,11 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 		deviceInfo = &DeviceInfo{
 			DeviceName: deviceName,
-			Hostname:   hostname,
-			OS:         osName,
-			Arch:       arch,
-			OSRelease:  osRelease,
-			OSVersion:  osVersion,
+			Hostname:   truncateParam(hostname, 255),
+			OS:         truncateParam(osName, 64),
+			Arch:       truncateParam(arch, 64),
+			OSRelease:  truncateParam(osRelease, 128),
+			OSVersion:  truncateParam(osVersion, 128),
 		}
 	}
 
@@ -251,7 +265,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "session not found or expired", http.StatusBadRequest)
 			return
 		}
-		oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, errParam, desc)
+		oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, errParam, sanitizeErrorDescription(desc))
 		return
 	}
 
@@ -441,6 +455,14 @@ func sanitizeErrorDescription(s string) string {
 	return string(out)
 }
 
+// truncateParam caps a tunneler-supplied query parameter to maxLen bytes.
+func truncateParam(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen]
+	}
+	return s
+}
+
 // handleProvisionerError translates an error from the EnrollmentProvisioner
 // into an OIDC error redirect. A *ProvisionError with a valid OIDC code is
 // passed through to the tunneler. Anything else (plain error or invalid code)
@@ -477,9 +499,15 @@ type provisionCompleteError struct {
 // Exactly one of Claims or Error must be set. Setting Claims completes the
 // flow successfully and mints an enrollment code. Setting Error performs an
 // OIDC error redirect to the tunneler instead.
+//
+// PendingID may optionally be included in the body instead of the query
+// string. Body takes precedence over query. Embedding apps that want to
+// avoid leaking the pending_id in Referer headers and logs should prefer
+// the body field.
 type provisionCompleteBody struct {
-	Claims map[string]any          `json:"claims,omitempty"`
-	Error  *provisionCompleteError `json:"error,omitempty"`
+	PendingID string                  `json:"pending_id,omitempty"`
+	Claims    map[string]any          `json:"claims,omitempty"`
+	Error     *provisionCompleteError `json:"error,omitempty"`
 }
 
 // handleProvisionComplete resumes the flow after an interactive provisioning
@@ -488,12 +516,6 @@ type provisionCompleteBody struct {
 // Either way, the pending provision is consumed and the browser is redirected
 // back to the tunneler.
 func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Request) {
-	pendingID := r.URL.Query().Get("pending_id")
-	if pendingID == "" {
-		http.Error(w, "pending_id is required", http.StatusBadRequest)
-		return
-	}
-
 	// Decode and validate the body BEFORE consuming the pending provision,
 	// so a malformed request doesn't burn the pending state and force the
 	// user to restart the entire enrollment flow.
@@ -503,6 +525,18 @@ func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+
+	// pending_id may come from the body (preferred, avoids Referer/log
+	// leakage) or the query string (backward compatible).
+	pendingID := body.PendingID
+	if pendingID == "" {
+		pendingID = r.URL.Query().Get("pending_id")
+	}
+	if pendingID == "" {
+		http.Error(w, "pending_id is required (in body or query)", http.StatusBadRequest)
+		return
+	}
+
 	if body.Claims == nil && body.Error == nil {
 		http.Error(w, `provision complete body must contain either "claims" or "error"`, http.StatusBadRequest)
 		return
@@ -557,14 +591,14 @@ func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Reques
 }
 
 // verifyPKCE validates the code_verifier against the stored code_challenge
-// using the S256 method.
+// using the S256 method. Uses constant-time comparison to avoid timing leaks.
 func verifyPKCE(challenge, method, verifier string) bool {
 	if method != "S256" || verifier == "" {
 		return false
 	}
 	h := sha256.Sum256([]byte(verifier))
 	computed := base64.RawURLEncoding.EncodeToString(h[:])
-	return computed == challenge
+	return subtle.ConstantTimeCompare([]byte(computed), []byte(challenge)) == 1
 }
 
 // oidcErrorRedirect sends an OIDC-compliant error redirect.
