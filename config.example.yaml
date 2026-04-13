@@ -33,6 +33,9 @@ controller:
   # and management API access (required for fallback reconciliation).
   # The file contains cert, key, and CA bundle.
   # identity_file: "/path/to/zdas-admin.json"
+  # PEM CA bundle for controllers using a private CA (when no identity file).
+  # Not needed when the controller has a publicly-trusted cert.
+  # ca_bundle: "/path/to/controller-ca.pem"
   poll_interval: "5m"                          # 0 = startup only
 
 # Fallback for unmodified tunnelers that don't send device_name.

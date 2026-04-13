@@ -80,6 +80,7 @@ type ACMEConfig struct {
 type ControllerConfig struct {
 	APIURL       string        `yaml:"api_url"`
 	IdentityFile string        `yaml:"identity_file"` // Ziti identity JSON (cert, key, CA)
+	CABundle     string        `yaml:"ca_bundle"`     // PEM CA bundle for controller TLS (when no identity file)
 	PollInterval time.Duration `yaml:"poll_interval"`
 	SelfIssuer   string        `yaml:"self_issuer"`
 }
@@ -315,6 +316,7 @@ func (c *Config) applyEnv() error {
 
 	setString(&c.Controller.APIURL, "ZDAS_CONTROLLER_API_URL")
 	setString(&c.Controller.IdentityFile, "ZDAS_CONTROLLER_IDENTITY_FILE")
+	setString(&c.Controller.CABundle, "ZDAS_CONTROLLER_CA_BUNDLE")
 	setString(&c.Controller.SelfIssuer, "ZDAS_CONTROLLER_SELF_ISSUER")
 	if err := setDuration(&c.Controller.PollInterval, "ZDAS_CONTROLLER_POLL_INTERVAL"); err != nil {
 		return err

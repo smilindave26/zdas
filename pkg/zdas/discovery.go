@@ -3,10 +3,12 @@ package zdas
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -33,7 +35,7 @@ type Discovery struct {
 // provider names that come from the ZDAS config (GitHub, etc.) and must not
 // collide with discovered signers.
 func NewDiscovery(cfg ControllerConfig, registry *ProviderRegistry, configuredNames map[string]struct{}, logger *slog.Logger) (*Discovery, error) {
-	client, err := controllerClient(cfg.APIURL, cfg.IdentityFile)
+	client, err := controllerClient(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -206,30 +208,46 @@ func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
 	return result.Data, nil
 }
 
-// controllerClient builds an HTTP client for controller communication. When
-// an identity file is provided, the CA is extracted from it. Otherwise, the CA
-// is bootstrapped from the controller's /.well-known/est/cacerts endpoint
-// (fetched with an insecure TLS client, then used to verify subsequent
-// requests). No client certificate is presented - this is for the public API.
-func controllerClient(apiURL, identityFilePath string) (*http.Client, error) {
-	if identityFilePath != "" {
-		id, err := loadIdentityFile(identityFilePath)
+// controllerClient builds an HTTP client for controller communication.
+//   - identity file set: CA from identity JSON + no client cert (public API)
+//   - ca bundle set: CA from PEM file + system roots
+//   - neither set: system CA pool only (works for publicly-trusted controllers)
+//
+// No client certificate is presented; this is for the public Edge Client API.
+func controllerClient(cfg ControllerConfig) (*http.Client, error) {
+	if cfg.IdentityFile != "" {
+		id, err := loadIdentityFile(cfg.IdentityFile)
 		if err != nil {
 			return nil, err
 		}
 		return discoveryClientFromIdentity(id), nil
 	}
 
-	// No identity file - bootstrap the CA from the controller.
-	pool, err := bootstrapCAPool(apiURL)
+	if cfg.CABundle != "" {
+		return clientFromCABundle(cfg.CABundle)
+	}
+
+	// No identity file or CA bundle - use system CA pool.
+	return &http.Client{Timeout: 15 * time.Second}, nil
+}
+
+// clientFromCABundle builds an HTTP client that trusts both the system CA pool
+// and the certificates in the given PEM file.
+func clientFromCABundle(path string) (*http.Client, error) {
+	pem, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read ca bundle: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("no valid certificates in ca bundle %s", path)
 	}
 	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool},
-		},
+		Timeout:   15 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
 	}, nil
 }
 

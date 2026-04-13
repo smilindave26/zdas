@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -18,8 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go.mozilla.org/pkcs7"
 )
 
 // generateTestIdentityFile creates a temporary Ziti identity JSON file with a
@@ -198,64 +195,6 @@ func TestDiscoveryClientFromIdentity(t *testing.T) {
 	}
 	if client.Timeout != 15*time.Second {
 		t.Errorf("timeout = %v", client.Timeout)
-	}
-}
-
-func TestBootstrapCAPoolFromEST(t *testing.T) {
-	// Generate a self-signed CA cert to serve from the mock EST endpoint.
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Test CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(1 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-
-	// Wrap the cert in PKCS#7 and serve as base64 (EST format, matching what
-	// the Ziti controller returns).
-	caCert, _ := x509.ParseCertificate(caDER)
-	p7Data, err := pkcs7.DegenerateCertificate(caCert.Raw)
-	if err != nil {
-		t.Fatalf("create pkcs7: %v", err)
-	}
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/.well-known/est/cacerts" {
-			w.Header().Set("Content-Type", "application/pkcs7-mime")
-			encoded := base64.StdEncoding.EncodeToString(p7Data)
-			w.Write([]byte(encoded))
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(server.Close)
-
-	pool, err := bootstrapCAPool(server.URL)
-	if err != nil {
-		t.Fatalf("bootstrapCAPool: %v", err)
-	}
-	if pool == nil {
-		t.Fatal("pool is nil")
-	}
-	// Verify the pool contains the CA.
-	_, err = caCert.Verify(x509.VerifyOptions{Roots: pool})
-	if err != nil {
-		t.Errorf("pool should contain the bootstrapped CA: %v", err)
-	}
-}
-
-func TestBootstrapCAPoolFallsBackOnFailure(t *testing.T) {
-	// Unreachable controller - should fall back to system pool, not error.
-	pool, err := bootstrapCAPool("https://127.0.0.1:1")
-	if err != nil {
-		t.Fatalf("expected fallback, got error: %v", err)
-	}
-	if pool == nil {
-		t.Fatal("pool is nil")
 	}
 }
 
