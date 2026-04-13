@@ -24,13 +24,14 @@ type Handlers struct {
 	discovery   *Discovery            // for cached network JWTs; may be nil in tests
 	reconciler  *Reconciler           // nil when fallback is disabled
 	provisioner EnrollmentProvisioner // nil uses built-in ComposeClaims
+	rateLimiter *ipRateLimiter        // nil when rate limiting is disabled
 	logger      *slog.Logger
 }
 
 // NewHandlers creates a Handlers with the given dependencies. discovery,
 // reconciler, and provisioner may be nil.
 func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, discovery *Discovery, reconciler *Reconciler, provisioner EnrollmentProvisioner, logger *slog.Logger) *Handlers {
-	return &Handlers{
+	h := &Handlers{
 		cfg:         cfg,
 		keys:        keys,
 		registry:    registry,
@@ -40,6 +41,17 @@ func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *Se
 		provisioner: provisioner,
 		logger:      logger,
 	}
+	if cfg.RateLimit.AuthorizePerSecond > 0 {
+		burst := cfg.RateLimit.AuthorizeBurst
+		if burst == 0 {
+			burst = int(cfg.RateLimit.AuthorizePerSecond) * 2
+			if burst < 1 {
+				burst = 1
+			}
+		}
+		h.rateLimiter = newIPRateLimiter(cfg.RateLimit.AuthorizePerSecond, burst)
+	}
+	return h
 }
 
 // Mux returns an http.ServeMux wired to all ZDAS endpoints.
@@ -97,6 +109,12 @@ func (h *Handlers) handleJWKS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if h.rateLimiter != nil && !h.rateLimiter.allow(extractIP(r)) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
 	q := r.URL.Query()
 	redirectURI := q.Get("redirect_uri")
 	state := q.Get("state")

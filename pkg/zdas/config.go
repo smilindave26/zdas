@@ -57,7 +57,15 @@ type Config struct {
 	// accepted (permissive, for development or when PKCE is the sole defense).
 	// In production, set this to the expected tunneler callback patterns, e.g.
 	// ["http://localhost:", "http://127.0.0.1:"].
-	AllowedRedirectURIs []string `yaml:"allowed_redirect_uris"`
+	AllowedRedirectURIs []string        `yaml:"allowed_redirect_uris"`
+	RateLimit           RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig controls per-IP rate limiting on the /authorize endpoint.
+// When AuthorizePerSecond is zero (the default), rate limiting is disabled.
+type RateLimitConfig struct {
+	AuthorizePerSecond float64 `yaml:"authorize_per_second"` // sustained rate per IP; 0 = disabled
+	AuthorizeBurst     int     `yaml:"authorize_burst"`      // peak burst per IP
 }
 
 // TLSConfig selects and configures the TLS serving mode.
