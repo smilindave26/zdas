@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -192,7 +191,7 @@ func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
 		return nil, fmt.Errorf("fetch signers: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read signers response: %w", err)
 	}
@@ -247,7 +246,7 @@ func (d *Discovery) fetchNetworkJWTs(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("fetch network-jwts: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read network-jwts response: %w", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -115,7 +114,7 @@ func (p *GitHubProvider) exchangeCode(ctx context.Context, code, redirectURI str
 		return "", fmt.Errorf("github token request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("read github token response: %w", err)
 	}
@@ -151,7 +150,7 @@ func (p *GitHubProvider) fetchUser(ctx context.Context, accessToken string) (map
 		return nil, fmt.Errorf("github user request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read github user response: %w", err)
 	}
@@ -180,7 +179,7 @@ func (p *GitHubProvider) checkOrgs(ctx context.Context, accessToken string) erro
 		return fmt.Errorf("github orgs request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return fmt.Errorf("read github orgs response: %w", err)
 	}

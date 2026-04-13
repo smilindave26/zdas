@@ -49,6 +49,11 @@ type PendingProvision struct {
 // SessionStore is an in-memory store for auth sessions, authorization codes,
 // and pending provisions with automatic expiration. It is safe for concurrent
 // use.
+// maxStoreEntries is a per-map capacity cap to prevent memory exhaustion from
+// a flood of /authorize requests. 10,000 concurrent in-flight sessions is far
+// beyond any realistic enrollment volume.
+const maxStoreEntries = 10_000
+
 type SessionStore struct {
 	sessionTTL time.Duration
 	codeTTL    time.Duration
@@ -89,6 +94,10 @@ func (s *SessionStore) CreateSession(sess *AuthSession) (string, error) {
 	}
 	sess.CreatedAt = time.Now()
 	s.mu.Lock()
+	if len(s.sessions) >= maxStoreEntries {
+		s.mu.Unlock()
+		return "", fmt.Errorf("session store full (%d entries)", maxStoreEntries)
+	}
 	s.sessions[id] = sess
 	s.mu.Unlock()
 	return id, nil
@@ -119,6 +128,10 @@ func (s *SessionStore) CreateCode(ac *AuthCode) (string, error) {
 	}
 	ac.CreatedAt = time.Now()
 	s.mu.Lock()
+	if len(s.codes) >= maxStoreEntries {
+		s.mu.Unlock()
+		return "", fmt.Errorf("code store full (%d entries)", maxStoreEntries)
+	}
 	s.codes[code] = ac
 	s.mu.Unlock()
 	return code, nil
@@ -150,6 +163,10 @@ func (s *SessionStore) CreatePendingProvision(pp *PendingProvision) (string, err
 	}
 	pp.CreatedAt = time.Now()
 	s.mu.Lock()
+	if len(s.provisions) >= maxStoreEntries {
+		s.mu.Unlock()
+		return "", fmt.Errorf("provision store full (%d entries)", maxStoreEntries)
+	}
 	s.provisions[id] = pp
 	s.mu.Unlock()
 	return id, nil

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -129,7 +128,7 @@ func bootstrapCAPool(controllerURL string) (*x509.CertPool, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return systemOrEmptyPool(), nil
 	}

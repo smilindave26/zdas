@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -224,7 +223,7 @@ func (r *Reconciler) findIdentity(ctx context.Context, externalID string) (id, h
 		return "", "", fmt.Errorf("fetch identity: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return "", "", fmt.Errorf("read identity response: %w", err)
 	}
@@ -275,7 +274,7 @@ func (r *Reconciler) renameIdentity(ctx context.Context, identityID, newName str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readResponseBody(resp)
 		return fmt.Errorf("patch identity returned %d: %s", resp.StatusCode, body)
 	}
 	return nil
