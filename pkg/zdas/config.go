@@ -156,6 +156,11 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// ApplyDefaults fills in any unset fields with sensible defaults. Embedding
+// applications that construct Config directly (instead of using LoadConfig)
+// should call this before passing the config to NewServer or NewHandler.
+func (c *Config) ApplyDefaults() { c.applyDefaults() }
+
 // applyDefaults fills in any unset fields with sensible defaults. Called after
 // YAML parsing and env overrides so that explicit empty values from neither
 // source are replaced.

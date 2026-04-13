@@ -110,7 +110,11 @@ func (r *Reconciler) PendingCount() int {
 
 func (r *Reconciler) loop(ctx context.Context) {
 	defer close(r.stopped)
-	ticker := time.NewTicker(r.cfg.PollInterval)
+	interval := r.cfg.PollInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
