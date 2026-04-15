@@ -62,12 +62,13 @@ type ProvisionRequest struct {
 
 	// From tunneler query params on /authorize. DeviceName and other fields
 	// will be empty for unmodified tunnelers (fallback path).
-	DeviceName string
-	Hostname   string
-	OS         string
-	Arch       string
-	OSRelease  string
-	OSVersion  string
+	DeviceName       string
+	Hostname         string
+	OS               string
+	Arch             string
+	OSRelease        string
+	OSVersion        string
+	EnrollmentMethod string // e.g. "enrollToCert", "enrollToToken"; empty if tunneler didn't send it
 
 	// True when the tunneler didn't send device info (fallback path).
 	IsFallback    bool

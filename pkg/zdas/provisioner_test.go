@@ -572,6 +572,73 @@ func TestProvisionCompleteErrorDescriptionSanitized(t *testing.T) {
 	}
 }
 
+// capturingProvisioner records the ProvisionRequest it receives.
+type capturingProvisioner struct {
+	captured ProvisionRequest
+	claims   map[string]interface{}
+}
+
+func (p *capturingProvisioner) Provision(_ context.Context, req ProvisionRequest) (*ProvisionResult, error) {
+	p.captured = req
+	return &ProvisionResult{Claims: p.claims}, nil
+}
+
+func TestProvisionerReceivesEnrollmentMethod(t *testing.T) {
+	ks, _ := GenerateKeySet()
+	reg := NewProviderRegistry()
+	cp := &callbackProvider{
+		name:   "mock-idp",
+		issuer: "https://mock-idp",
+		identity: &UpstreamIdentity{
+			Subject:  "u1",
+			Email:    "alice@example.com",
+			Username: "alice",
+			Issuer:   "https://mock-idp",
+			Raw:      map[string]interface{}{"preferred_username": "alice"},
+		},
+	}
+	_ = reg.Register(cp)
+	store := NewSessionStore(10*time.Minute, 60*time.Second)
+	t.Cleanup(store.Stop)
+
+	provisioner := &capturingProvisioner{
+		claims: map[string]interface{}{
+			"device_identity_name": "alice-laptop",
+			"device_external_id":   "ext-id",
+			"sub":                  "ext-id",
+		},
+	}
+
+	cfg := Config{
+		ExternalURL: "https://zdas.test",
+		Claims:      defaultClaimsConfig(),
+		Token:       TokenConfig{Issuer: "https://zdas.test", Audience: "ziti-enroll", Expiry: 5 * time.Minute},
+	}
+	h := NewHandlers(cfg, ks, reg, store, nil, nil, provisioner, slog.Default())
+	mux := h.Mux()
+
+	_, challenge := generateTestPKCE(t)
+	sessID, _ := store.CreateSession(&AuthSession{
+		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerState:               "tstate",
+		TunnelerCodeChallenge:       challenge,
+		TunnelerCodeChallengeMethod: "S256",
+		DeviceInfo:                  &DeviceInfo{DeviceName: "laptop"},
+		EnrollmentMethod:            "enrollToToken",
+		UpstreamProviderName:        "mock-idp",
+	})
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/callback?code=c&state="+sessID, nil))
+	if w.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	if provisioner.captured.EnrollmentMethod != "enrollToToken" {
+		t.Errorf("EnrollmentMethod = %q, want %q", provisioner.captured.EnrollmentMethod, "enrollToToken")
+	}
+}
+
 func TestProvisionCompleteExpired(t *testing.T) {
 	ks, _ := GenerateKeySet()
 	reg := NewProviderRegistry()

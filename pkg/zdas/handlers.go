@@ -125,6 +125,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	osRelease := q.Get("os_release")
 	osVersion := q.Get("os_version")
 	idpHint := q.Get("idp") // set by the IdP selector page, not by tunnelers
+	enrollmentMethod := q.Get("enrollment_method")
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
 
@@ -220,6 +221,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		TunnelerCodeChallengeMethod: codeChallengeMethod,
 		DeviceInfo:                  deviceInfo,
 		FallbackNonce:               fallbackNonce,
+		EnrollmentMethod:            truncateParam(enrollmentMethod, 64),
 		UpstreamProviderName:        provider.Name(),
 	}
 
@@ -316,12 +318,13 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 	var claims map[string]interface{}
 	if h.provisioner != nil {
 		req := ProvisionRequest{
-			Email:         identity.Email,
-			Name:          identity.Username,
-			Subject:       identity.Subject,
-			Provider:      sess.UpstreamProviderName,
-			IsFallback:    sess.FallbackNonce != "",
-			FallbackNonce: sess.FallbackNonce,
+			Email:            identity.Email,
+			Name:             identity.Username,
+			Subject:          identity.Subject,
+			Provider:         sess.UpstreamProviderName,
+			EnrollmentMethod: sess.EnrollmentMethod,
+			IsFallback:       sess.FallbackNonce != "",
+			FallbackNonce:    sess.FallbackNonce,
 		}
 		if sess.DeviceInfo != nil {
 			req.DeviceName = sess.DeviceInfo.DeviceName

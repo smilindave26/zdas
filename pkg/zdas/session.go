@@ -17,6 +17,7 @@ type AuthSession struct {
 	TunnelerCodeChallengeMethod string
 	DeviceInfo                  *DeviceInfo // nil when fallback path (unmodified tunneler)
 	FallbackNonce               string      // populated only on fallback path
+	EnrollmentMethod            string      // from tunneler's enrollment_method param (e.g. "enrollToCert", "enrollToToken")
 	ZDASCodeVerifier            string      // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName        string
 	CreatedAt                   time.Time
