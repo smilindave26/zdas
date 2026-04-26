@@ -162,7 +162,6 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "only S256 code_challenge_method is supported")
 		return
 	}
-	var deviceInfo *DeviceInfo
 	var fallbackNonce string
 	if deviceName == "" {
 		if !h.cfg.Fallback.Enabled {
@@ -177,19 +176,20 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fallbackNonce = nonce
-	} else {
-		if len(deviceName) > 255 {
-			oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name too long (max 255 characters)")
-			return
-		}
-		deviceInfo = &DeviceInfo{
-			DeviceName: deviceName,
-			Hostname:   truncateParam(hostname, 255),
-			OS:         truncateParam(osName, 64),
-			Arch:       truncateParam(arch, 64),
-			OSRelease:  truncateParam(osRelease, 128),
-			OSVersion:  truncateParam(osVersion, 128),
-		}
+	} else if len(deviceName) > 255 {
+		oidcErrorRedirect(w, r, redirectURI, state, "invalid_request", "device_name too long (max 255 characters)")
+		return
+	}
+	// Always populate DeviceInfo with whatever the tunneler sent. On the
+	// fallback path DeviceName will be empty, but os/hostname/arch may
+	// still be present and useful to the consumer (e.g. provisioner).
+	deviceInfo := &DeviceInfo{
+		DeviceName: deviceName,
+		Hostname:   truncateParam(hostname, 255),
+		OS:         truncateParam(osName, 64),
+		Arch:       truncateParam(arch, 64),
+		OSRelease:  truncateParam(osRelease, 128),
+		OSVersion:  truncateParam(osVersion, 128),
 	}
 
 	// Resolve upstream provider.
@@ -326,14 +326,12 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 			IsFallback:       sess.FallbackNonce != "",
 			FallbackNonce:    sess.FallbackNonce,
 		}
-		if sess.DeviceInfo != nil {
-			req.DeviceName = sess.DeviceInfo.DeviceName
-			req.Hostname = sess.DeviceInfo.Hostname
-			req.OS = sess.DeviceInfo.OS
-			req.Arch = sess.DeviceInfo.Arch
-			req.OSRelease = sess.DeviceInfo.OSRelease
-			req.OSVersion = sess.DeviceInfo.OSVersion
-		}
+		req.DeviceName = sess.DeviceInfo.DeviceName
+		req.Hostname = sess.DeviceInfo.Hostname
+		req.OS = sess.DeviceInfo.OS
+		req.Arch = sess.DeviceInfo.Arch
+		req.OSRelease = sess.DeviceInfo.OSRelease
+		req.OSVersion = sess.DeviceInfo.OSVersion
 		result, err := h.provisioner.Provision(r.Context(), req)
 		if err != nil {
 			h.handleProvisionerError(w, r, err, sess.TunnelerRedirectURI, sess.TunnelerState, sess.UpstreamProviderName)
@@ -391,9 +389,9 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		"code":  {zdasCode},
 		"state": {sess.TunnelerState},
 	}.Encode()
-	deviceLog := "fallback"
-	if sess.DeviceInfo != nil {
-		deviceLog = sess.DeviceInfo.DeviceName
+	deviceLog := sess.DeviceInfo.DeviceName
+	if deviceLog == "" {
+		deviceLog = "fallback"
 	}
 	h.logger.Info("callback complete, redirecting to tunneler", "provider", provider.Name(), "device", deviceLog)
 	http.Redirect(w, r, redir, http.StatusFound)

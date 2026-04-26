@@ -93,6 +93,30 @@ func TestComposeClaimsFallback(t *testing.T) {
 	}
 }
 
+func TestComposeClaimsFallbackWithPartialDeviceInfo(t *testing.T) {
+	identity := &UpstreamIdentity{
+		Subject:  "u42",
+		Username: "jsmith",
+		Issuer:   "https://keycloak",
+		Raw:      map[string]interface{}{"preferred_username": "jsmith"},
+	}
+	fbCfg := FallbackConfig{
+		Enabled:          true,
+		TempNameTemplate: "{username}-pending-{nonce_short}",
+	}
+	// Partial DeviceInfo: no device_name, but OS is known (e.g. iOS tunneler).
+	info := &DeviceInfo{OS: "iOS", Arch: "arm64"}
+	claims := ComposeClaims(defaultClaimsConfig(), fbCfg, identity, info, "a3f9b2")
+
+	// Nonce triggers fallback path even when DeviceInfo is non-nil.
+	if got := claims["device_identity_name"]; got != "jsmith-pending-a3f9b2" {
+		t.Errorf("fallback identity name = %q, want jsmith-pending-a3f9b2", got)
+	}
+	if got := claims["device_name"]; got != "" {
+		t.Errorf("fallback device_name should be empty, got %q", got)
+	}
+}
+
 func TestComposeClaimsFallbackUniqueExternalIDs(t *testing.T) {
 	identity := &UpstreamIdentity{Subject: "u1", Issuer: "https://idp"}
 	fbCfg := FallbackConfig{TempNameTemplate: "{username}-pending-{nonce_short}"}

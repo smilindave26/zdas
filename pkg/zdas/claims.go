@@ -22,21 +22,21 @@ type DeviceInfo struct {
 	OSVersion  string // from os_version param
 }
 
-// ComposeClaims builds the full set of JWT claims for a ZDAS token. When info
-// is non-nil, it uses the primary path (device info from tunneler). When info
-// is nil and nonce is non-empty, it uses the fallback path (temporary name
-// with a nonce-based external ID).
+// ComposeClaims builds the full set of JWT claims for a ZDAS token. When nonce
+// is empty, it uses the primary path (device_name from tunneler). When nonce is
+// non-empty, it uses the fallback path (temporary name with a nonce-based
+// external ID) regardless of whether info is populated.
 func ComposeClaims(cfg ClaimsConfig, fbCfg FallbackConfig, identity *UpstreamIdentity, info *DeviceInfo, nonce string) map[string]interface{} {
 	username := resolveUsername(cfg.UsernameClaim, identity)
 
 	var identityName, externalID, deviceName string
-	if info != nil {
-		// Primary path: device info available.
+	if nonce == "" {
+		// Primary path: device_name present.
 		identityName = expandTemplate(cfg.NameTemplate, username, info)
 		externalID = computeExternalID(identity.Issuer, identity.Subject, info.DeviceName)
 		deviceName = info.DeviceName
 	} else {
-		// Fallback path: generate temp name and nonce-based external ID.
+		// Fallback path: no device_name, use nonce for temp name and external ID.
 		identityName = expandFallbackTemplate(fbCfg.TempNameTemplate, username, nonce)
 		externalID = computeExternalID(identity.Issuer, identity.Subject, nonce)
 		deviceName = ""
