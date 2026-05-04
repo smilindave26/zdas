@@ -61,6 +61,7 @@ func (h *Handlers) Mux() *http.ServeMux {
 	mux.HandleFunc("GET /.well-known/jwks.json", h.handleJWKS)
 	mux.HandleFunc("GET /network-jwts", h.handleNetworkJWTs)
 	mux.HandleFunc("GET /edge/client/v1/external-jwt-signers", h.handleExtJWTSigners)
+	mux.HandleFunc("GET /external-jwt-signers", h.handleExtJWTSigners)
 	mux.HandleFunc("GET /authorize", h.handleAuthorize)
 	mux.HandleFunc("GET /callback", h.handleCallback)
 	mux.HandleFunc("POST /token", h.handleToken)
