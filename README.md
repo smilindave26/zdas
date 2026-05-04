@@ -1,13 +1,13 @@
-# ZDAS - Ziti Device Authentication Service
+# ZDAS - OpenZiti Device Authentication Service
 
 ZDAS is a lightweight Go service that solves a specific problem with [OpenZiti](https://openziti.io) device enrollment: standard OIDC providers issue tokens about *users*, not *devices*. If the same user enrolls from three devices, the tokens are identical and the second and third enrollments fail because the external ID collides.
 
-ZDAS sits between the tunneler and your upstream identity provider, delegates user authentication to the IdP, collects device info from the tunneler, and mints its own JWT that combines both. Each device gets a unique Ziti identity. Works with both `enroll-to-cert` and `enroll-to-token` enrollment types.
+ZDAS sits between the tunneler and your upstream identity provider, delegates user authentication to the IdP, collects device info from the tunneler, and mints its own JWT that combines both. Each device gets a unique OpenZiti identity. Works with both `enroll-to-cert` and `enroll-to-token` enrollment types.
 
 ## How it works
 
 ```
-Tunneler          ZDAS              Upstream IdP       Ziti Controller
+Tunneler          ZDAS              Upstream IdP       OpenZiti Controller
    |                |                    |                   |
    |-- /authorize ->|                    |                   |
    |   (device info)|                    |                   |
@@ -33,7 +33,7 @@ When multiple identity providers are available, ZDAS presents a selection page i
 ## Features
 
 - **Single binary, no database.** Ephemeral EC P-256 keys generated at startup, served via JWKS. In-memory session store with automatic cleanup.
-- **Controller-driven IdP discovery.** ZDAS polls the Ziti controller for ext-jwt-signers with enrollment enabled (cert or token), so adding a new IdP to the controller automatically makes it available through ZDAS.
+- **Controller-driven IdP discovery.** ZDAS polls the OpenZiti controller for ext-jwt-signers with enrollment enabled (cert or token), so adding a new IdP to the controller automatically makes it available through ZDAS.
 - **Non-OIDC provider support.** GitHub (and other OAuth-only providers) can be configured directly. Both discovered and configured providers are unified behind a common `UpstreamProvider` interface.
 - **Fallback for unmodified tunnelers.** Deploy ZDAS before updating any tunnelers. Unmodified tunnelers enroll with a temporary name, and ZDAS renames the identity via the management API after the tunneler connects and reports `envInfo`. Set `fallback.enabled: false` once all tunnelers are updated.
 - **Three TLS modes.** `acme` (automatic Let's Encrypt), `static` (bring your own cert), or `none` (behind a reverse proxy).
@@ -80,8 +80,8 @@ Key settings:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `external_url` | Public URL where tunnelers and the controller reach ZDAS | (required) |
-| `controller.api_url` | Ziti controller Edge Client API URL | (required) |
-| `controller.identity_file` | Ziti admin identity JSON (cert, key, CA) for management API | (optional, required for fallback) |
+| `controller.api_url` | OpenZiti controller Edge Client API URL | (required) |
+| `controller.identity_file` | OpenZiti admin identity JSON (cert, key, CA) for management API | (optional, required for fallback) |
 | `fallback.enabled` | Allow enrollment without device info from unmodified tunnelers | `false` |
 | `claims.name_template` | Template for identity names. Placeholders: `{username}`, `{device_name}`, `{hostname}`, `{os}`, `{arch}` | `{username}-{device_name}` |
 | `token.expiry` | How long enrollment tokens are valid | `5m` |
@@ -123,7 +123,7 @@ pkg/zdas/
   claims.go        claim composition and JWT minting
   handlers.go      HTTP endpoints (/authorize, /callback, /token, OIDC discovery, JWKS)
   session.go       in-memory session and auth code store
-  identity.go      Ziti identity file parsing and management API auth
+  identity.go      OpenZiti identity file parsing and management API auth
   reconciler.go    fallback identity reconciliation
   server.go        server assembly and TLS modes
   acme.go          Let's Encrypt autocert
