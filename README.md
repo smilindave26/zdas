@@ -16,14 +16,14 @@ Tunneler          ZDAS              Upstream IdP       OpenZiti Controller
    |                |<-- callback -------|                   |
    |                |                    |                   |
    |                | compose claims:    |                   |
-   |                |   username + device |                   |
+   |                |  username + device |                   |
    |                | sign with own key  |                   |
    |                |                    |                   |
    |<-- ZDAS JWT ---|                    |                   |
    |                                                         |
-   |-- enroll (Bearer ZDAS JWT) ------------------------------>|
-   |                                     validates via JWKS ->|
-   |                                     creates identity     |
+   |-- enroll (Bearer ZDAS JWT) ---------------------------->|
+   |                                    validates via JWKS ->|
+   |                                    creates identity     |
 ```
 
 ZDAS discovers upstream IdPs automatically by polling the controller's public `external-jwt-signers` endpoint - no parallel IdP configuration needed. Non-OIDC providers like GitHub (which issues opaque tokens, not JWTs) can be configured directly.
