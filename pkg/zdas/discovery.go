@@ -25,10 +25,11 @@ type Discovery struct {
 	client          *http.Client
 	logger          *slog.Logger
 
-	mu              sync.Mutex
-	cancel          context.CancelFunc
-	stopped         chan struct{}
-	networkJWTsBody []byte // cached response from GET /network-jwts
+	mu                sync.Mutex
+	cancel            context.CancelFunc
+	stopped           chan struct{}
+	networkJWTsBody   []byte // cached response from GET /network-jwts
+	extJWTSignersBody []byte // cached response from GET /edge/client/v1/external-jwt-signers
 }
 
 // NewDiscovery creates a Discovery poller. configuredNames is the set of
@@ -128,8 +129,16 @@ func (d *Discovery) NetworkJWTsBody() []byte {
 	return d.networkJWTsBody
 }
 
+// ExtJWTSignersBody returns the cached response from the controller's
+// /edge/client/v1/external-jwt-signers endpoint, or nil if not yet fetched.
+func (d *Discovery) ExtJWTSignersBody() []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.extJWTSignersBody
+}
+
 func (d *Discovery) poll(ctx context.Context) error {
-	signers, err := d.fetchSigners(ctx)
+	rawSigners, signers, err := d.fetchSigners(ctx)
 	if err != nil {
 		return err
 	}
@@ -143,6 +152,10 @@ func (d *Discovery) poll(ctx context.Context) error {
 		d.networkJWTsBody = body
 		d.mu.Unlock()
 	}
+
+	d.mu.Lock()
+	d.extJWTSignersBody = rawSigners
+	d.mu.Unlock()
 
 	var providers []UpstreamProvider
 	for _, s := range signers {
@@ -180,32 +193,32 @@ func (d *Discovery) poll(ctx context.Context) error {
 	return nil
 }
 
-func (d *Discovery) fetchSigners(ctx context.Context) ([]signerEntry, error) {
+func (d *Discovery) fetchSigners(ctx context.Context) (rawBody []byte, entries []signerEntry, err error) {
 	url := d.cfg.APIURL + "/edge/client/v1/external-jwt-signers"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build signers request: %w", err)
+		return nil, nil, fmt.Errorf("build signers request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch signers: %w", err)
+		return nil, nil, fmt.Errorf("fetch signers: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := readResponseBody(resp)
 	if err != nil {
-		return nil, fmt.Errorf("read signers response: %w", err)
+		return nil, nil, fmt.Errorf("read signers response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("signers endpoint returned %d: %s", resp.StatusCode, body)
+		return nil, nil, fmt.Errorf("signers endpoint returned %d: %s", resp.StatusCode, body)
 	}
 
 	var result signerResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse signers response: %w", err)
+		return nil, nil, fmt.Errorf("parse signers response: %w", err)
 	}
-	return result.Data, nil
+	return body, result.Data, nil
 }
 
 // controllerClient builds an HTTP client for controller communication.

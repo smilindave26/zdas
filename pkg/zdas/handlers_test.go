@@ -108,6 +108,20 @@ func TestHandleNetworkJWTsNotCached(t *testing.T) {
 	}
 }
 
+func TestHandleExtJWTSignersNotCached(t *testing.T) {
+	h, _ := setupHandlers(t)
+	mux := h.Mux()
+
+	req := httptest.NewRequest(http.MethodGet, "/edge/client/v1/external-jwt-signers", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	// No discovery set (nil) - should return 503.
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", w.Code)
+	}
+}
+
 func TestHandleAuthorizeMissingDeviceNameFallbackDisabled(t *testing.T) {
 	h, _ := setupHandlers(t)
 	mux := h.Mux()

@@ -173,6 +173,40 @@ func TestDiscoveryCachesNetworkJWTs(t *testing.T) {
 	}
 }
 
+func TestDiscoveryCachesExtJWTSigners(t *testing.T) {
+	signers := []signerEntry{
+		{Name: "kc", ClientID: "c", EnrollToCertEnabled: true},
+	}
+	ctrl, _ := mockControllerAndIDPs(t, signers)
+
+	reg := NewProviderRegistry()
+	d, err := NewDiscovery(ControllerConfig{APIURL: ctrl.URL}, reg, nil, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ExtJWTSignersBody() != nil {
+		t.Error("expected nil before first poll")
+	}
+	if err := d.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	body := d.ExtJWTSignersBody()
+	if body == nil {
+		t.Fatal("expected cached ext-jwt-signers after poll")
+	}
+	// Verify the cached body round-trips to the same signers the mock served.
+	var got signerResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal cached body: %v", err)
+	}
+	if len(got.Data) == 0 {
+		t.Error("expected at least one signer in cached body")
+	}
+	if got.Data[0].Name != "kc" {
+		t.Errorf("signer name = %q, want kc", got.Data[0].Name)
+	}
+}
+
 func TestDiscoveryControllerUnreachable(t *testing.T) {
 	reg := NewProviderRegistry()
 	d, err := NewDiscovery(ControllerConfig{APIURL: "http://127.0.0.1:1"}, reg, nil, slog.Default())
