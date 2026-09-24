@@ -70,6 +70,13 @@ type ProvisionRequest struct {
 	OSVersion        string
 	EnrollmentMethod string // e.g. "enrollToCert", "enrollToToken"; empty if tunneler didn't send it
 
+	// ClientType is the free-form client_type query parameter from
+	// /authorize (e.g. "tunneler", "host", "service"). It lets an embedder
+	// that provisions non-device identities through the same flow tell
+	// them apart from a user's device. Unmodified tunnelers do not send it,
+	// so it is empty for them. ZDAS does not interpret the value.
+	ClientType string
+
 	// True when the tunneler didn't send device info (fallback path).
 	IsFallback    bool
 	FallbackNonce string

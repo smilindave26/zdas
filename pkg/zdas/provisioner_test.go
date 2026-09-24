@@ -665,3 +665,69 @@ func TestProvisionCompleteExpired(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestProvisionerReceivesClientType(t *testing.T) {
+	cases := []struct {
+		name  string
+		param string // appended to the /authorize query
+		want  string
+	}{
+		{"client_type sent", "&client_type=host", "host"},
+		{"unmodified tunneler omits it", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ks, _ := GenerateKeySet()
+			reg := NewProviderRegistry()
+			_ = reg.Register(&callbackProvider{
+				name:   "mock-idp",
+				issuer: "https://mock-idp",
+				identity: &UpstreamIdentity{
+					Subject:  "u1",
+					Username: "alice",
+					Issuer:   "https://mock-idp",
+					Raw:      map[string]interface{}{},
+				},
+			})
+			store := NewSessionStore(10*time.Minute, 60*time.Second)
+			t.Cleanup(store.Stop)
+
+			provisioner := &capturingProvisioner{
+				claims: map[string]interface{}{
+					"device_identity_name": "alice-host",
+					"device_external_id":   "ext-id",
+					"sub":                  "ext-id",
+				},
+			}
+			cfg := Config{
+				ExternalURL: "https://zdas.test",
+				Claims:      defaultClaimsConfig(),
+				Token:       TokenConfig{Issuer: "https://zdas.test", Audience: "ziti-enroll", Expiry: 5 * time.Minute},
+			}
+			mux := NewHandlers(cfg, ks, reg, store, nil, nil, provisioner, slog.Default()).Mux()
+
+			_, challenge := generateTestPKCE(t)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+				"/authorize?redirect_uri=https://tunneler/cb&state=s1&device_name=box"+
+					"&code_challenge="+challenge+"&code_challenge_method=S256"+tc.param, nil))
+			if w.Code != http.StatusFound {
+				t.Fatalf("authorize status = %d, body = %s", w.Code, w.Body.String())
+			}
+			loc, err := url.Parse(w.Header().Get("Location"))
+			if err != nil {
+				t.Fatalf("parse Location: %v", err)
+			}
+			sessID := loc.Query().Get("state")
+
+			w = httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/callback?code=c&state="+sessID, nil))
+			if w.Code != http.StatusFound {
+				t.Fatalf("callback status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if provisioner.captured.ClientType != tc.want {
+				t.Errorf("ClientType = %q, want %q", provisioner.captured.ClientType, tc.want)
+			}
+		})
+	}
+}

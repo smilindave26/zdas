@@ -142,6 +142,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	osVersion := q.Get("os_version")
 	idpHint := q.Get("idp") // set by the IdP selector page, not by tunnelers
 	enrollmentMethod := q.Get("enrollment_method")
+	clientType := q.Get("client_type") // optional hint for embedders; not sent by unmodified tunnelers
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
 
@@ -238,6 +239,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		DeviceInfo:                  deviceInfo,
 		FallbackNonce:               fallbackNonce,
 		EnrollmentMethod:            truncateParam(enrollmentMethod, 64),
+		ClientType:                  truncateParam(clientType, 64),
 		UpstreamProviderName:        provider.Name(),
 	}
 
@@ -339,6 +341,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 			Subject:          identity.Subject,
 			Provider:         sess.UpstreamProviderName,
 			EnrollmentMethod: sess.EnrollmentMethod,
+			ClientType:       sess.ClientType,
 			IsFallback:       sess.FallbackNonce != "",
 			FallbackNonce:    sess.FallbackNonce,
 		}

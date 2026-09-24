@@ -18,6 +18,7 @@ type AuthSession struct {
 	DeviceInfo                  *DeviceInfo // always populated; DeviceName may be empty on fallback path
 	FallbackNonce               string      // populated only on fallback path
 	EnrollmentMethod            string      // from tunneler's enrollment_method param (e.g. "enrollToCert", "enrollToToken")
+	ClientType                  string      // from the client_type param; empty for unmodified tunnelers
 	ZDASCodeVerifier            string      // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName        string
 	CreatedAt                   time.Time

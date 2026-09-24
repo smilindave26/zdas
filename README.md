@@ -95,6 +95,7 @@ Updated tunnelers send device info as query parameters on the authorize URL:
 
 - `device_name` - primary device identifier (hostname, machine-id, or user-chosen name)
 - `hostname`, `os`, `arch`, `os_release`, `os_version` - optional, for richer identity names
+- `client_type` - optional free-form hint (`tunneler`, `host`, `service`) passed through to an embedding application's provisioner
 
 Unmodified tunnelers work without changes when `fallback.enabled` is true. They enroll with a temporary name (e.g., `jsmith-pending-a3f9b2`) that ZDAS reconciles to the real hostname after the tunneler connects.
 
