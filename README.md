@@ -100,6 +100,8 @@ Unmodified tunnelers work without changes when `fallback.enabled` is true. They 
 
 ## Embedding
 
+Mount the full service on your own mux:
+
 ```go
 import "github.com/smilindave26/zdas/pkg/zdas"
 
@@ -108,6 +110,23 @@ mux.Handle("/device-auth/", http.StripPrefix("/device-auth", handler))
 // ... on shutdown:
 handler.Stop()
 ```
+
+Or use the provider layer on its own to federate login to an upstream IdP without the enrollment handlers:
+
+```go
+p, err := zdas.NewOIDCProvider(ctx, zdas.OIDCProviderConfig{
+	Name:          "okta",
+	Issuer:        "https://example.okta.com",
+	ClientID:      clientID,
+	ClientSecret:  clientSecret,
+	FetchUserInfo: true, // merge userinfo claims (e.g. groups) into identity.Raw
+})
+authURL, verifier, err := p.AuthorizeURLWithPKCE(state, callbackURL)
+// ... redirect the browser, then on callback:
+identity, err := p.ExchangeAndIdentifyWithPKCE(ctx, code, callbackURL, verifier)
+```
+
+See the package documentation for the compatibility promise covering both uses.
 
 ## Project layout
 
