@@ -178,6 +178,7 @@ func (d *Discovery) poll(ctx context.Context) error {
 			Issuer:   s.Issuer,
 			ClientID: s.ClientID,
 			AuthURL:  s.ExternalAuthURL,
+			Logger:   d.logger,
 		})
 		if err != nil {
 			d.logger.Warn("failed to create oidc provider from signer, skipping", "name", s.Name, "error", err)

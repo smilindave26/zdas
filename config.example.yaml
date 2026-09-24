@@ -66,6 +66,8 @@ fallback:
 #     client_secret: "GOCSPX-..."       # required for Google "Web application" clients; optional for other OIDC IdPs
 #     oidc_issuer_url: "https://accounts.google.com"
 #     # scopes: ["openid", "profile", "email"]   # optional, this is the default
+#     # fetch_userinfo: true     # merge the userinfo response into upstream claims (for IdPs that keep groups out of the ID token)
+#     # require_userinfo: true   # fail the login if userinfo cannot be fetched; needs fetch_userinfo
 
 # Claim composition
 # Updated tunnelers send device info as query params on /authorize:

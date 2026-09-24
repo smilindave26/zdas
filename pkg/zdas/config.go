@@ -114,6 +114,12 @@ type ProviderConfig struct {
 	// OIDC-specific fields.
 	OIDCIssuerURL string   `yaml:"oidc_issuer_url"` // base URL for OIDC discovery
 	Scopes        []string `yaml:"scopes"`          // optional, defaults to openid+profile+email
+	// FetchUserInfo merges the issuer's userinfo response into the upstream
+	// identity's raw claims; see OIDCProviderConfig.FetchUserInfo. Default off.
+	FetchUserInfo bool `yaml:"fetch_userinfo"`
+	// RequireUserInfo makes a failed userinfo fetch fail the login. Requires
+	// FetchUserInfo.
+	RequireUserInfo bool `yaml:"require_userinfo"`
 
 	// GitHub-specific fields.
 	UsernameField string   `yaml:"username_field"`
@@ -279,6 +285,9 @@ func (c *Config) Validate() error {
 		case ProviderTypeOIDC:
 			if p.ClientID == "" || p.OIDCIssuerURL == "" {
 				return fmt.Errorf("providers[%d] (%s): client_id and oidc_issuer_url are required for oidc", i, p.Name)
+			}
+			if p.RequireUserInfo && !p.FetchUserInfo {
+				return fmt.Errorf("providers[%d] (%s): require_userinfo needs fetch_userinfo", i, p.Name)
 			}
 		case "":
 			return fmt.Errorf("providers[%d] (%s): type is required", i, p.Name)

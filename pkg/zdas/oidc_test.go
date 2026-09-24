@@ -24,8 +24,16 @@ import (
 //   - /jwks
 //   - /token  (returns a signed id_token)
 //
-// It returns the server, a cleanup function, and the server URL.
+// It returns the server and the signing key.
 func mockOIDCServer(t *testing.T, claims map[string]interface{}) (*httptest.Server, jwk.Key) {
+	t.Helper()
+	return mockOIDCServerWithUserInfo(t, claims, nil)
+}
+
+// mockOIDCServerWithUserInfo is mockOIDCServer plus a /userinfo endpoint
+// served by userInfo. When userInfo is nil the discovery document omits
+// userinfo_endpoint, matching an issuer that does not offer one.
+func mockOIDCServerWithUserInfo(t *testing.T, claims map[string]interface{}, userInfo http.HandlerFunc) (*httptest.Server, jwk.Key) {
 	t.Helper()
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -61,9 +69,16 @@ func mockOIDCServer(t *testing.T, claims map[string]interface{}) (*httptest.Serv
 			"subject_types_supported":               []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"ES256"},
 		}
+		if userInfo != nil {
+			doc["userinfo_endpoint"] = baseURL + "/userinfo"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(doc)
 	})
+
+	if userInfo != nil {
+		mux.HandleFunc("/userinfo", userInfo)
+	}
 
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		set := jwk.NewSet()
@@ -283,6 +298,174 @@ func TestOIDCProviderUsernameFallback(t *testing.T) {
 	}
 	if identity.Username != "Fallback Name" {
 		t.Errorf("Username = %q, want 'Fallback Name'", identity.Username)
+	}
+}
+
+// jsonUserInfo returns a /userinfo handler that checks the bearer token
+// matches the mock token endpoint's access token and replies with body.
+func jsonUserInfo(t *testing.T, body map[string]interface{}) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer opaque-at" {
+			t.Errorf("userinfo Authorization = %q, want Bearer opaque-at", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(body)
+	}
+}
+
+func TestOIDCFetchUserInfoMergesClaims(t *testing.T) {
+	idClaims := map[string]interface{}{
+		"sub":   "user-42",
+		"email": "id@example.com",
+	}
+	server, _ := mockOIDCServerWithUserInfo(t, idClaims, jsonUserInfo(t, map[string]interface{}{
+		"sub":    "user-42",
+		"email":  "userinfo@example.com", // conflicts with id_token; id_token must win
+		"groups": []interface{}{"admins", "devs"},
+	}))
+
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:          "okta",
+		Issuer:        server.URL,
+		ClientID:      "test-client",
+		FetchUserInfo: true,
+	})
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+
+	identity, err := p.ExchangeAndIdentify(context.Background(), "code", server.URL+"/callback")
+	if err != nil {
+		t.Fatalf("ExchangeAndIdentify: %v", err)
+	}
+	groups, ok := identity.Raw["groups"].([]interface{})
+	if !ok || len(groups) != 2 || groups[0] != "admins" {
+		t.Errorf("Raw[groups] = %v, want [admins devs]", identity.Raw["groups"])
+	}
+	if got := identity.Raw["email"]; got != "id@example.com" {
+		t.Errorf("Raw[email] = %v, want id_token value to win on conflict", got)
+	}
+}
+
+func TestOIDCFetchUserInfoOffByDefault(t *testing.T) {
+	server, _ := mockOIDCServerWithUserInfo(t, map[string]interface{}{"sub": "u1"}, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("userinfo endpoint called without FetchUserInfo")
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	})
+
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:     "idp",
+		Issuer:   server.URL,
+		ClientID: "test-client",
+	})
+	if err != nil {
+		t.Fatalf("NewOIDCProvider: %v", err)
+	}
+	identity, err := p.ExchangeAndIdentify(context.Background(), "code", server.URL+"/callback")
+	if err != nil {
+		t.Fatalf("ExchangeAndIdentify: %v", err)
+	}
+	if _, present := identity.Raw["groups"]; present {
+		t.Error("Raw should only contain id_token claims")
+	}
+}
+
+func TestOIDCFetchUserInfoFailureNonFatal(t *testing.T) {
+	cases := []struct {
+		name     string
+		userInfo http.HandlerFunc
+	}{
+		{"http error", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}},
+		{"sub mismatch", jsonUserInfo(t, map[string]interface{}{"sub": "someone-else", "groups": []interface{}{"admins"}})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := mockOIDCServerWithUserInfo(t, map[string]interface{}{"sub": "u1", "name": "n"}, tc.userInfo)
+			p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+				Name:          "idp",
+				Issuer:        server.URL,
+				ClientID:      "test-client",
+				FetchUserInfo: true,
+			})
+			if err != nil {
+				t.Fatalf("NewOIDCProvider: %v", err)
+			}
+			identity, err := p.ExchangeAndIdentify(context.Background(), "code", server.URL+"/callback")
+			if err != nil {
+				t.Fatalf("ExchangeAndIdentify should succeed without RequireUserInfo: %v", err)
+			}
+			if identity.Subject != "u1" {
+				t.Errorf("Subject = %q", identity.Subject)
+			}
+			if _, present := identity.Raw["groups"]; present {
+				t.Error("claims from a rejected userinfo response must not be merged")
+			}
+		})
+	}
+}
+
+func TestOIDCRequireUserInfoFailureIsFatal(t *testing.T) {
+	cases := []struct {
+		name     string
+		userInfo http.HandlerFunc
+	}{
+		{"http error", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}},
+		{"sub mismatch", jsonUserInfo(t, map[string]interface{}{"sub": "someone-else"})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, _ := mockOIDCServerWithUserInfo(t, map[string]interface{}{"sub": "u1"}, tc.userInfo)
+			p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+				Name:            "idp",
+				Issuer:          server.URL,
+				ClientID:        "test-client",
+				FetchUserInfo:   true,
+				RequireUserInfo: true,
+			})
+			if err != nil {
+				t.Fatalf("NewOIDCProvider: %v", err)
+			}
+			if _, err := p.ExchangeAndIdentify(context.Background(), "code", server.URL+"/callback"); err == nil {
+				t.Fatal("expected error with RequireUserInfo")
+			}
+		})
+	}
+}
+
+func TestOIDCUserInfoWithoutEndpoint(t *testing.T) {
+	// Discovery document has no userinfo_endpoint.
+	server, _ := mockOIDCServer(t, map[string]interface{}{"sub": "u1"})
+
+	p, err := NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:          "idp",
+		Issuer:        server.URL,
+		ClientID:      "test-client",
+		FetchUserInfo: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchUserInfo without endpoint should construct: %v", err)
+	}
+	if p.fetchUserInfo {
+		t.Error("fetchUserInfo should be disabled when the issuer has no userinfo_endpoint")
+	}
+	if _, err := p.ExchangeAndIdentify(context.Background(), "code", server.URL+"/callback"); err != nil {
+		t.Errorf("ExchangeAndIdentify: %v", err)
+	}
+
+	_, err = NewOIDCProvider(context.Background(), OIDCProviderConfig{
+		Name:            "idp",
+		Issuer:          server.URL,
+		ClientID:        "test-client",
+		FetchUserInfo:   true,
+		RequireUserInfo: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "userinfo_endpoint") {
+		t.Errorf("RequireUserInfo without endpoint should fail construction, got %v", err)
 	}
 }
 

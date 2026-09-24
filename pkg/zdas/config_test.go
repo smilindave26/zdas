@@ -241,6 +241,40 @@ func TestValidateOIDCAccepts(t *testing.T) {
 	}
 }
 
+func TestValidateRequireUserInfoNeedsFetch(t *testing.T) {
+	cfg := &Config{
+		ExternalURL: "https://das.example.com",
+		Controller:  ControllerConfig{APIURL: "https://c"},
+		Providers: []ProviderConfig{
+			{Type: "oidc", Name: "kc", ClientID: "c", OIDCIssuerURL: "https://kc.example.com", RequireUserInfo: true},
+		},
+	}
+	cfg.applyDefaults()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "fetch_userinfo") {
+		t.Errorf("expected require_userinfo error, got %v", err)
+	}
+}
+
+func TestLoadConfigOIDCUserInfoFields(t *testing.T) {
+	path := writeTempConfig(t, minimalYAML+`
+providers:
+  - type: oidc
+    name: okta
+    client_id: c
+    oidc_issuer_url: https://okta.example.com
+    fetch_userinfo: true
+    require_userinfo: true
+`)
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	p := cfg.Providers[0]
+	if !p.FetchUserInfo || !p.RequireUserInfo {
+		t.Errorf("FetchUserInfo = %v, RequireUserInfo = %v, want both true", p.FetchUserInfo, p.RequireUserInfo)
+	}
+}
+
 func TestValidateNameTemplateMustContainPlaceholders(t *testing.T) {
 	cfg := &Config{
 		ExternalURL: "https://das.example.com",

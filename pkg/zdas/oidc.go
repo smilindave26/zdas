@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 )
 
 // OIDCProvider is an UpstreamProvider backed by a standard OIDC issuer. It
@@ -19,14 +22,18 @@ import (
 // exchange (e.g. Google Web application OAuth clients). PKCE is always
 // applied when a verifier is threaded through the session.
 type OIDCProvider struct {
-	name         string
-	issuer       string
-	clientID     string
-	clientSecret string // optional; set for confidential-client IdPs (e.g. Google Web)
-	authURL      string
-	tokenURL     string
-	verifier     *oidc.IDTokenVerifier
-	scopes       []string
+	name            string
+	issuer          string
+	clientID        string
+	clientSecret    string // optional; set for confidential-client IdPs (e.g. Google Web)
+	authURL         string
+	tokenURL        string
+	provider        *oidc.Provider
+	verifier        *oidc.IDTokenVerifier
+	scopes          []string
+	fetchUserInfo   bool
+	requireUserInfo bool
+	logger          *slog.Logger
 }
 
 // OIDCProviderConfig holds the data needed to construct an OIDCProvider.
@@ -40,6 +47,27 @@ type OIDCProviderConfig struct {
 	AuthURL      string
 	TokenURL     string
 	Scopes       []string
+
+	// FetchUserInfo, when true, calls the issuer's userinfo endpoint with
+	// the access token after the ID token is validated and merges the
+	// response into UpstreamIdentity.Raw. ID token claims take precedence
+	// on conflict: they are signed and audience-bound, whereas userinfo is
+	// fetched with a bearer token. Useful for IdPs that omit group and
+	// other authorization claims from the ID token (Okta by default, Entra
+	// when the token would be too large, Auth0 custom claims).
+	//
+	// A failed userinfo fetch is logged and otherwise ignored unless
+	// RequireUserInfo is also set. A userinfo response whose sub does not
+	// match the ID token is treated as a failed fetch.
+	FetchUserInfo bool
+
+	// RequireUserInfo makes a failed userinfo fetch fail the whole
+	// ExchangeAndIdentify call. It has no effect unless FetchUserInfo is
+	// set.
+	RequireUserInfo bool
+
+	// Logger receives userinfo fetch warnings. nil uses slog.Default().
+	Logger *slog.Logger
 }
 
 // NewOIDCProvider creates an OIDCProvider from the given config. It creates an
@@ -63,17 +91,35 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig) (*OIDCProvider
 		scopes = []string{"openid", "profile", "email"}
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	fetchUserInfo := cfg.FetchUserInfo
+	if fetchUserInfo && provider.UserInfoEndpoint() == "" {
+		if cfg.RequireUserInfo {
+			return nil, fmt.Errorf("userinfo required for %q but issuer %q advertises no userinfo_endpoint", cfg.Name, cfg.Issuer)
+		}
+		logger.Warn("issuer advertises no userinfo_endpoint, userinfo fetch disabled", "provider", cfg.Name, "issuer", cfg.Issuer)
+		fetchUserInfo = false
+	}
+
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
 
 	return &OIDCProvider{
-		name:         cfg.Name,
-		issuer:       cfg.Issuer,
-		clientID:     cfg.ClientID,
-		clientSecret: cfg.ClientSecret,
-		authURL:      authURL,
-		tokenURL:     tokenURL,
-		verifier:     verifier,
-		scopes:       scopes,
+		name:            cfg.Name,
+		issuer:          cfg.Issuer,
+		clientID:        cfg.ClientID,
+		clientSecret:    cfg.ClientSecret,
+		authURL:         authURL,
+		tokenURL:        tokenURL,
+		provider:        provider,
+		verifier:        verifier,
+		scopes:          scopes,
+		fetchUserInfo:   fetchUserInfo,
+		requireUserInfo: cfg.RequireUserInfo,
+		logger:          logger,
 	}, nil
 }
 
@@ -115,7 +161,8 @@ func (p *OIDCProvider) AuthorizeURLWithPKCE(state, redirectURI string) (authURL,
 
 // ExchangeAndIdentify exchanges the authorization code for tokens via the
 // upstream token endpoint, validates the ID token, and returns the normalized
-// identity.
+// identity. When the provider was configured with FetchUserInfo, userinfo
+// claims are merged into Raw as described on OIDCProviderConfig.
 func (p *OIDCProvider) ExchangeAndIdentify(ctx context.Context, code, redirectURI string) (*UpstreamIdentity, error) {
 	return p.exchangeAndIdentify(ctx, code, redirectURI, "")
 }
@@ -169,6 +216,16 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 	raw := make(map[string]interface{})
 	_ = idToken.Claims(&raw)
 
+	if p.fetchUserInfo {
+		accessToken, _ := tokenResp["access_token"].(string)
+		if err := p.mergeUserInfo(ctx, accessToken, claims.Sub, raw); err != nil {
+			if p.requireUserInfo {
+				return nil, fmt.Errorf("userinfo from %s: %w", p.name, err)
+			}
+			p.logger.Warn("userinfo fetch failed, continuing with id_token claims only", "provider", p.name, "error", err)
+		}
+	}
+
 	username := claims.PreferredUsername
 	if username == "" {
 		username = claims.Name
@@ -193,6 +250,33 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 		Issuer:   p.issuer,
 		Raw:      raw,
 	}, nil
+}
+
+// mergeUserInfo fetches the userinfo endpoint with accessToken and adds any
+// claims not already present in raw. The response is rejected when its sub
+// differs from the ID token's, per OIDC Core 5.3.2.
+func (p *OIDCProvider) mergeUserInfo(ctx context.Context, accessToken, idTokenSub string, raw map[string]interface{}) error {
+	if accessToken == "" {
+		return errors.New("no access_token in token response")
+	}
+	ctx = oidc.ClientContext(ctx, httpClient)
+	info, err := p.provider.UserInfo(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken}))
+	if err != nil {
+		return err
+	}
+	if info.Subject != idTokenSub {
+		return errors.New("userinfo sub does not match id_token sub")
+	}
+	var extra map[string]interface{}
+	if err := info.Claims(&extra); err != nil {
+		return fmt.Errorf("decode userinfo claims: %w", err)
+	}
+	for k, v := range extra {
+		if _, exists := raw[k]; !exists {
+			raw[k] = v
+		}
+	}
+	return nil
 }
 
 // joinScopes joins scopes with space separator per OAuth2 spec.
