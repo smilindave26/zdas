@@ -11,7 +11,11 @@
 // The full service: [NewHandler] (or [NewServer]) with a [Config] mounts
 // the /authorize, /callback, /token, and discovery endpoints on the
 // embedder's mux. [WithProvisioner] and [EnrollmentProvisioner] let the
-// embedder own user lookup and identity creation.
+// embedder own user lookup and identity creation. [WithKeySet] and
+// [WithStore] let several replicas behind a load balancer share signing
+// keys and in-flight enrollment state, with the per-replica exceptions
+// listed on WithStore; package zdastest provides a conformance suite for
+// [Store] implementations.
 //
 // The provider layer alone: [NewOIDCProvider], [NewGitHubProvider],
 // [UpstreamProvider], [UpstreamIdentity], and [ProviderRegistry] can be
@@ -29,8 +33,8 @@
 // Struct fields are only added, never removed or retyped; new fields are
 // optional and default to the previous behavior. Interface methods are
 // only added when every implementation in this package gains them at the
-// same time, and embedders that implement [UpstreamProvider] themselves
-// should expect to add new methods on upgrade. Query parameters that
+// same time, and embedders that implement [UpstreamProvider] or [Store]
+// themselves should expect to add new methods on upgrade. Query parameters that
 // tunnelers send to /authorize are only added, and unmodified tunnelers
 // keep working without them.
 package zdas

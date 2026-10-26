@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
@@ -12,10 +13,12 @@ import (
 )
 
 // KeySet is an EC P-256 signing key pair plus its public JWK representation.
-// It is generated once at startup; on restart a new key is produced and the
-// JWKS endpoint immediately reflects it. Old tokens signed with previous keys
-// become unverifiable, which is acceptable because enrollment tokens are
-// short-lived and single-use.
+// By default NewServer generates one at startup, so a restart produces a new
+// key and tokens signed with the old one become unverifiable. That is
+// acceptable for a single instance because enrollment tokens are short-lived
+// and single-use. Embedders that run several replicas, or want the key to
+// survive restarts, load their own key with NewKeySet and pass it to
+// WithKeySet.
 type KeySet struct {
 	private   *ecdsa.PrivateKey
 	publicJWK jwk.Key
@@ -30,6 +33,33 @@ func GenerateKeySet() (*KeySet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate ec key: %w", err)
 	}
+	return NewKeySet(priv)
+}
+
+// NewKeySet wraps an existing EC P-256 private key in a KeySet. The key ID is
+// the RFC 7638 JWK thumbprint of the public key, as for GenerateKeySet. It
+// rejects keys on any other curve and keys whose public half does not match
+// the private scalar, either of which would publish a JWKS that cannot verify
+// the tokens signed with it.
+func NewKeySet(priv *ecdsa.PrivateKey) (*KeySet, error) {
+	if priv == nil {
+		return nil, errors.New("private key is nil")
+	}
+	if priv.Curve != elliptic.P256() {
+		return nil, errors.New("private key is not on curve P-256")
+	}
+	ecdhPriv, err := priv.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+	ecdhPub, err := priv.PublicKey.ECDH()
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key: %w", err)
+	}
+	if !ecdhPriv.PublicKey().Equal(ecdhPub) {
+		return nil, errors.New("public key does not match private key")
+	}
+
 	pub, err := jwk.FromRaw(priv.Public())
 	if err != nil {
 		return nil, fmt.Errorf("wrap public key as jwk: %w", err)
@@ -61,12 +91,37 @@ func (ks *KeySet) Private() *ecdsa.PrivateKey { return ks.private }
 // PublicJWK returns the public key as a jwk.Key with kid/alg/use set.
 func (ks *KeySet) PublicJWK() jwk.Key { return ks.publicJWK }
 
-// PublicJWKS returns the marshaled JWKS JSON containing the single public key,
-// suitable for serving from GET /.well-known/jwks.json.
+// PublicJWKS returns the marshaled JWKS JSON containing this key alone. The
+// ZDAS JWKS endpoint also publishes any verify-only keys passed to WithKeySet,
+// so serve this only where no rotation is in progress.
 func (ks *KeySet) PublicJWKS() ([]byte, error) {
+	return publicJWKS([]*KeySet{ks})
+}
+
+// publicJWKS returns the marshaled JWKS JSON containing the public key of
+// every given key set, in order.
+func publicJWKS(sets []*KeySet) ([]byte, error) {
 	set := jwk.NewSet()
-	if err := set.AddKey(ks.publicJWK); err != nil {
-		return nil, fmt.Errorf("add key to set: %w", err)
+	for _, ks := range sets {
+		if err := set.AddKey(ks.publicJWK); err != nil {
+			return nil, fmt.Errorf("add key %s to set: %w", ks.kid, err)
+		}
 	}
 	return json.Marshal(set)
+}
+
+// uniqueKeySets returns active followed by each verifyOnly key whose kid has
+// not already appeared. The kid is the key's thumbprint, so equal kids mean
+// the same public key and the duplicate adds nothing to the JWKS.
+func uniqueKeySets(active *KeySet, verifyOnly []*KeySet) []*KeySet {
+	out := []*KeySet{active}
+	seen := map[string]struct{}{active.kid: {}}
+	for _, ks := range verifyOnly {
+		if _, dup := seen[ks.kid]; dup {
+			continue
+		}
+		seen[ks.kid] = struct{}{}
+		out = append(out, ks)
+	}
+	return out
 }

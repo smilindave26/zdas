@@ -95,14 +95,21 @@ func (s *SessionStore) CreateSession(sess *AuthSession) (string, error) {
 		return "", err
 	}
 	sess.CreatedAt = time.Now()
+	if err := s.putSession(id, sess); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// putSession stores sess under id as given, without stamping CreatedAt.
+func (s *SessionStore) putSession(id string, sess *AuthSession) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.sessions) >= maxStoreEntries {
-		s.mu.Unlock()
-		return "", fmt.Errorf("session store full (%d entries)", maxStoreEntries)
+		return fmt.Errorf("session store full (%d entries)", maxStoreEntries)
 	}
 	s.sessions[id] = sess
-	s.mu.Unlock()
-	return id, nil
+	return nil
 }
 
 // GetSession retrieves and deletes (consumes) an auth session by ID. Returns
@@ -129,14 +136,21 @@ func (s *SessionStore) CreateCode(ac *AuthCode) (string, error) {
 		return "", err
 	}
 	ac.CreatedAt = time.Now()
+	if err := s.putCode(code, ac); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// putCode stores ac under code as given, without stamping CreatedAt.
+func (s *SessionStore) putCode(code string, ac *AuthCode) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.codes) >= maxStoreEntries {
-		s.mu.Unlock()
-		return "", fmt.Errorf("code store full (%d entries)", maxStoreEntries)
+		return fmt.Errorf("code store full (%d entries)", maxStoreEntries)
 	}
 	s.codes[code] = ac
-	s.mu.Unlock()
-	return code, nil
+	return nil
 }
 
 // ConsumeCode retrieves and marks an authorization code as used. Returns nil if
@@ -164,14 +178,22 @@ func (s *SessionStore) CreatePendingProvision(pp *PendingProvision) (string, err
 		return "", err
 	}
 	pp.CreatedAt = time.Now()
+	if err := s.putPendingProvision(id, pp); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// putPendingProvision stores pp under id as given, without stamping
+// CreatedAt.
+func (s *SessionStore) putPendingProvision(id string, pp *PendingProvision) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.provisions) >= maxStoreEntries {
-		s.mu.Unlock()
-		return "", fmt.Errorf("provision store full (%d entries)", maxStoreEntries)
+		return fmt.Errorf("provision store full (%d entries)", maxStoreEntries)
 	}
 	s.provisions[id] = pp
-	s.mu.Unlock()
-	return id, nil
+	return nil
 }
 
 // ConsumePendingProvision retrieves and deletes a pending provision. Returns
