@@ -1,14 +1,19 @@
 package zdas
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jws"
+	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
 func TestGenerateKeySet(t *testing.T) {
@@ -119,5 +124,160 @@ func TestTwoKeySetsProduceDifferentKeys(t *testing.T) {
 	}
 	if ks1.KID() == ks2.KID() {
 		t.Error("two independently generated key sets have the same kid")
+	}
+}
+
+func TestNewKeySetKIDIsThumbprint(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	ks, err := NewKeySet(priv)
+	if err != nil {
+		t.Fatalf("NewKeySet: %v", err)
+	}
+	if ks.Private() != priv {
+		t.Error("Private() does not return the wrapped key")
+	}
+
+	// Compute the RFC 7638 thumbprint independently of NewKeySet.
+	pub, err := jwk.FromRaw(priv.Public())
+	if err != nil {
+		t.Fatalf("wrap public key: %v", err)
+	}
+	thumb, err := pub.Thumbprint(crypto.SHA256)
+	if err != nil {
+		t.Fatalf("thumbprint: %v", err)
+	}
+	if want := base64.RawURLEncoding.EncodeToString(thumb); ks.KID() != want {
+		t.Errorf("kid = %q, want thumbprint %q", ks.KID(), want)
+	}
+
+	// The same key wrapped twice yields the same kid.
+	again, err := NewKeySet(priv)
+	if err != nil {
+		t.Fatalf("NewKeySet again: %v", err)
+	}
+	if again.KID() != ks.KID() {
+		t.Errorf("kid not deterministic: %q then %q", ks.KID(), again.KID())
+	}
+}
+
+func TestNewKeySetRejectsInvalidKeys(t *testing.T) {
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
+	}
+	a, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key a: %v", err)
+	}
+	b, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key b: %v", err)
+	}
+	mismatched := &ecdsa.PrivateKey{PublicKey: b.PublicKey, D: a.D}
+
+	for name, priv := range map[string]*ecdsa.PrivateKey{
+		"nil":        nil,
+		"P-384":      p384,
+		"mismatched": mismatched,
+	} {
+		if _, err := NewKeySet(priv); err == nil {
+			t.Errorf("%s: NewKeySet succeeded, want error", name)
+		}
+	}
+}
+
+func TestNewKeySetJWKSRoundTrip(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	ks, err := NewKeySet(priv)
+	if err != nil {
+		t.Fatalf("NewKeySet: %v", err)
+	}
+	data, err := ks.PublicJWKS()
+	if err != nil {
+		t.Fatalf("PublicJWKS: %v", err)
+	}
+	set, err := jwk.Parse(data)
+	if err != nil {
+		t.Fatalf("parse JWKS: %v", err)
+	}
+	if set.Len() != 1 {
+		t.Fatalf("keys count = %d, want 1", set.Len())
+	}
+	key, ok := set.LookupKeyID(ks.KID())
+	if !ok {
+		t.Fatalf("kid %q not in JWKS", ks.KID())
+	}
+	var raw ecdsa.PublicKey
+	if err := key.Raw(&raw); err != nil {
+		t.Fatalf("extract raw public key: %v", err)
+	}
+	if !raw.Equal(&priv.PublicKey) {
+		t.Error("JWKS public key does not match the wrapped key")
+	}
+}
+
+func TestPublicJWKSMultipleKeys(t *testing.T) {
+	sets := make([]*KeySet, 3)
+	for i := range sets {
+		ks, err := GenerateKeySet()
+		if err != nil {
+			t.Fatalf("GenerateKeySet: %v", err)
+		}
+		sets[i] = ks
+	}
+	data, err := publicJWKS(uniqueKeySets(sets[0], sets[1:]))
+	if err != nil {
+		t.Fatalf("publicJWKS: %v", err)
+	}
+	pubSet, err := jwk.Parse(data)
+	if err != nil {
+		t.Fatalf("parse JWKS: %v", err)
+	}
+	if pubSet.Len() != 3 {
+		t.Fatalf("keys count = %d, want 3", pubSet.Len())
+	}
+
+	tokenCfg := TokenConfig{Issuer: "https://zdas.test", Audience: "ziti", Expiry: time.Minute}
+	for i, ks := range sets {
+		if _, ok := pubSet.LookupKeyID(ks.KID()); !ok {
+			t.Errorf("key %d: kid %q not in JWKS", i, ks.KID())
+		}
+		signed, err := MintToken(tokenCfg, map[string]interface{}{"sub": "x"}, ks)
+		if err != nil {
+			t.Fatalf("key %d: MintToken: %v", i, err)
+		}
+		if _, err := jwt.Parse([]byte(signed), jwt.WithKeySet(pubSet)); err != nil {
+			t.Errorf("key %d: verify against JWKS: %v", i, err)
+		}
+	}
+}
+
+func TestUniqueKeySetsDropsDuplicateKIDs(t *testing.T) {
+	a, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	b, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	// A second KeySet wrapping a's key has a's kid.
+	aAgain, err := NewKeySet(a.Private())
+	if err != nil {
+		t.Fatalf("NewKeySet: %v", err)
+	}
+	got := uniqueKeySets(a, []*KeySet{b, aAgain, b})
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		kids := make([]string, len(got))
+		for i, ks := range got {
+			kids[i] = ks.KID()
+		}
+		t.Errorf("uniqueKeySets = %v, want [%s %s]", kids, a.KID(), b.KID())
 	}
 }

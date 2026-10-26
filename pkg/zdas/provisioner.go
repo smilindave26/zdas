@@ -1,6 +1,10 @@
 package zdas
 
-import "context"
+import (
+	"context"
+	"errors"
+	"slices"
+)
 
 // EnrollmentProvisioner is an optional hook for embedding applications. When
 // set, ZDAS calls Provision after upstream authentication succeeds instead of
@@ -100,10 +104,69 @@ type Option func(*serverOptions)
 
 type serverOptions struct {
 	provisioner EnrollmentProvisioner
+	keys        *KeySet   // nil generates a key at startup
+	verifyKeys  []*KeySet // published in the JWKS alongside keys
+	store       Store     // nil uses an in-memory SessionStore
+	err         error     // misuse of an option, reported by NewServer
 }
 
 // WithProvisioner sets an EnrollmentProvisioner hook. When set, ZDAS calls
 // it after upstream authentication instead of using built-in claim composition.
 func WithProvisioner(p EnrollmentProvisioner) Option {
 	return func(o *serverOptions) { o.provisioner = p }
+}
+
+// WithKeySet makes ZDAS sign tokens with active instead of a key generated at
+// startup, and publish active plus every verifyOnly key at
+// /.well-known/jwks.json. Replicas behind a load balancer must share the same
+// keys, because the Ziti controller may fetch the JWKS from a replica other
+// than the one that signed the token. A verifyOnly key with the same kid as
+// active or an earlier verifyOnly key is published once.
+//
+// To rotate from K1 to K2 across replicas without rejecting any token:
+//
+//  1. Roll out WithKeySet(K1, K2) to every replica. K2 is published but
+//     not yet used. Wait until the Ziti controller's cached copy of the
+//     JWKS includes K2.
+//  2. Roll out WithKeySet(K2, K1). K2 signs, and K1 still verifies tokens
+//     already in flight.
+//  3. Once the token expiry has passed since step 2 finished, roll out
+//     WithKeySet(K2).
+//
+// Skipping step 1, or its wait, lets a replica sign with K2 while another
+// replica or the controller's cache knows only K1. NewServer fails if any
+// key is nil.
+func WithKeySet(active *KeySet, verifyOnly ...*KeySet) Option {
+	return func(o *serverOptions) {
+		if active == nil || slices.Contains(verifyOnly, nil) {
+			o.err = errors.Join(o.err, errors.New("WithKeySet: nil key set"))
+			return
+		}
+		o.keys = active
+		o.verifyKeys = verifyOnly
+	}
+}
+
+// WithStore makes ZDAS keep in-flight enrollment state in s instead of in
+// memory, so that a flow started on one replica can finish on another. See
+// Store for the contract. ZDAS does not stop or close s; its lifetime belongs
+// to the caller. Entries are bound to Config.Token.Issuer, so replicas
+// sharing s must share the issuer, and a Store shared by differently
+// configured instances cannot leak entries between them. Replicas compare
+// entry timestamps written by each other, so their clocks must agree to
+// within a minute.
+//
+// Two pieces of per-process state are not in the Store: fallback
+// enrollments tracked for reconciliation, which are lost if the replica
+// that handled the callback restarts before the tunneler connects, and the
+// /authorize rate limit, which each replica enforces on its own.
+// NewServer fails if s is nil.
+func WithStore(s Store) Option {
+	return func(o *serverOptions) {
+		if s == nil {
+			o.err = errors.Join(o.err, errors.New("WithStore: nil store"))
+			return
+		}
+		o.store = s
+	}
 }

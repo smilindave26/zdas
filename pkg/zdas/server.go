@@ -14,7 +14,7 @@ type Server struct {
 	cfg        Config
 	keys       *KeySet
 	registry   *ProviderRegistry
-	store      *SessionStore
+	store      *SessionStore // nil with WithStore; ZDAS stops only a store it created
 	discovery  *Discovery
 	reconciler *Reconciler // nil when fallback is disabled
 	handlers   *Handlers
@@ -29,21 +29,40 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 	for _, o := range opts {
 		o(&sopts)
 	}
-	keys, err := GenerateKeySet()
-	if err != nil {
-		return nil, fmt.Errorf("generate key set: %w", err)
+	if sopts.err != nil {
+		return nil, sopts.err
 	}
-	logger.Info("generated signing key", "kid", keys.KID())
+
+	keys := sopts.keys
+	if keys == nil {
+		var err error
+		keys, err = GenerateKeySet()
+		if err != nil {
+			return nil, fmt.Errorf("generate key set: %w", err)
+		}
+		logger.Info("generated signing key", "kid", keys.KID())
+	} else {
+		verifyKIDs := make([]string, len(sopts.verifyKeys))
+		for i, ks := range sopts.verifyKeys {
+			verifyKIDs[i] = ks.KID()
+		}
+		logger.Info("using injected signing key", "kid", keys.KID(), "verify_only_kids", verifyKIDs)
+	}
 
 	registry := NewProviderRegistry()
-	store := NewSessionStore(cfg.Session.Timeout, cfg.Session.CodeExpiry)
-	// Stop the session store cleanup goroutine if NewServer fails partway
-	// through; on success the returned Server owns it.
-	defer func() {
-		if retErr != nil {
-			store.Stop()
-		}
-	}()
+	store := sopts.store
+	var memStore *SessionStore
+	if store == nil {
+		memStore = NewSessionStore(cfg.Session.Timeout, cfg.Session.CodeExpiry)
+		store = sessionStoreAdapter{memStore}
+		// Stop the session store cleanup goroutine if NewServer fails
+		// partway through; on success the returned Server owns it.
+		defer func() {
+			if retErr != nil {
+				memStore.Stop()
+			}
+		}()
+	}
 
 	// Register directly-configured providers (those defined in ZDAS config
 	// rather than discovered from the controller).
@@ -105,13 +124,13 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 		logger.Info("fallback enrollment enabled without reconciler (no identity_file)")
 	}
 
-	handlers := NewHandlers(cfg, keys, registry, store, disc, reconciler, sopts.provisioner, logger)
+	handlers := newHandlers(cfg, keys, sopts.verifyKeys, registry, store, disc, reconciler, sopts.provisioner, logger)
 
 	return &Server{
 		cfg:        cfg,
 		keys:       keys,
 		registry:   registry,
-		store:      store,
+		store:      memStore,
 		discovery:  disc,
 		reconciler: reconciler,
 		handlers:   handlers,
@@ -133,7 +152,7 @@ func (h *Handler) Stop() {
 	if h.srv.reconciler != nil {
 		h.srv.reconciler.Stop()
 	}
-	h.srv.store.Stop()
+	h.srv.stopStore()
 }
 
 // NewHandler returns a Handler for embedding ZDAS in another application.
@@ -198,7 +217,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.reconciler != nil {
 		s.reconciler.Stop()
 	}
-	s.store.Stop()
+	s.stopStore()
 	if s.chalSrv != nil {
 		s.chalSrv.Shutdown(ctx)
 	}
@@ -206,4 +225,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return s.httpSrv.Shutdown(ctx)
 	}
 	return nil
+}
+
+// stopStore stops the session store cleanup goroutine if ZDAS created the
+// store. A Store passed to WithStore belongs to the caller and is left alone.
+func (s *Server) stopStore() {
+	if s.store != nil {
+		s.store.Stop()
+	}
 }

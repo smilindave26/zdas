@@ -1,6 +1,7 @@
 package zdas
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -480,4 +481,181 @@ func TestIntegrationFallbackFlow(t *testing.T) {
 	if devName != "" {
 		t.Errorf("device_name should be empty for fallback, got %v", devName)
 	}
+}
+
+// replicaConfig returns a Config for NewServer backed by a mock controller
+// that advertises no signers, so tests register providers directly.
+func replicaConfig(t *testing.T) Config {
+	t.Helper()
+	ctrlMux := http.NewServeMux()
+	ctrlMux.HandleFunc("/edge/client/v1/external-jwt-signers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(signerResponse{Data: []signerEntry{}})
+	})
+	ctrlServer := httptest.NewServer(ctrlMux)
+	t.Cleanup(ctrlServer.Close)
+	return Config{
+		Listen:      ":0",
+		ExternalURL: "https://zdas.test",
+		TLS:         TLSConfig{Mode: TLSModeNone},
+		Controller: ControllerConfig{
+			APIURL:     ctrlServer.URL,
+			SelfIssuer: "https://zdas.test",
+		},
+		Claims: defaultClaimsConfig(),
+		Token: TokenConfig{
+			Issuer:   "https://zdas.test",
+			Audience: "ziti-enrolltocert",
+			Expiry:   5 * time.Minute,
+		},
+		Session: SessionConfig{
+			Timeout:    10 * time.Minute,
+			CodeExpiry: 60 * time.Second,
+		},
+	}
+}
+
+// newReplica builds a Server with opts and a mock upstream provider, and
+// returns its mux.
+func newReplica(t *testing.T, cfg Config, opts ...Option) (*Server, http.Handler) {
+	t.Helper()
+	srv, err := NewServer(cfg, slog.Default(), opts...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { srv.Shutdown(context.Background()) })
+	if err := srv.registry.Register(&callbackProvider{
+		name:   "mock-idp",
+		issuer: "https://mock-idp",
+		identity: &UpstreamIdentity{
+			Subject:  "u42",
+			Username: "alice",
+			Issuer:   "https://mock-idp",
+			Raw:      map[string]interface{}{"preferred_username": "alice"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return srv, srv.handlers.Mux()
+}
+
+// enrollAcross runs /authorize on start, /callback on callback, and /token on
+// token, and returns the minted JWT.
+func enrollAcross(t *testing.T, start, callback, token http.Handler) string {
+	t.Helper()
+	verifier, challenge := generateTestPKCE(t)
+	authReq := "/authorize?" + url.Values{
+		"redirect_uri":          {"https://tunneler/cb"},
+		"response_type":         {"code"},
+		"state":                 {"tunneler-state"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"device_name":           {"laptop"},
+	}.Encode()
+	w := httptest.NewRecorder()
+	start.ServeHTTP(w, httptest.NewRequest(http.MethodGet, authReq, nil))
+	if w.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	upstream, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse upstream redirect: %v", err)
+	}
+
+	callbackReq := "/callback?" + url.Values{
+		"code":  {"upstream-code"},
+		"state": {upstream.Query().Get("state")},
+	}.Encode()
+	w = httptest.NewRecorder()
+	callback.ServeHTTP(w, httptest.NewRequest(http.MethodGet, callbackReq, nil))
+	if w.Code != http.StatusFound {
+		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	tunneler, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse tunneler redirect: %v", err)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {tunneler.Query().Get("code")},
+		"redirect_uri":  {"https://tunneler/cb"},
+		"code_verifier": {verifier},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	token.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("token: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal token response: %v", err)
+	}
+	return resp.IDToken
+}
+
+// verifyWithJWKSFrom verifies rawJWT against the JWKS served by mux, as the
+// controller would when it reaches that replica.
+func verifyWithJWKSFrom(t *testing.T, mux http.Handler, rawJWT string) jwt.Token {
+	t.Helper()
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("jwks: status = %d", w.Code)
+	}
+	set, err := jwk.Parse(w.Body.Bytes())
+	if err != nil {
+		t.Fatalf("parse jwks: %v", err)
+	}
+	tok, err := jwt.Parse([]byte(rawJWT), jwt.WithKeySet(set))
+	if err != nil {
+		t.Fatalf("verify jwt: %v", err)
+	}
+	return tok
+}
+
+// TestIntegrationMultiReplicaFlow runs one enrollment across two replicas
+// that share an injected key and store: /authorize on the first, /callback
+// on the second, /token on the first, and the token is verified against the
+// second's JWKS.
+func TestIntegrationMultiReplicaFlow(t *testing.T) {
+	ks, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	store := newJSONStore()
+	cfg := replicaConfig(t)
+	_, a := newReplica(t, cfg, WithKeySet(ks), WithStore(store))
+	_, b := newReplica(t, cfg, WithKeySet(ks), WithStore(store))
+
+	rawJWT := enrollAcross(t, a, b, a)
+	tok := verifyWithJWKSFrom(t, b, rawJWT)
+	if name, _ := tok.Get("device_identity_name"); name != "alice-laptop" {
+		t.Errorf("device_identity_name = %v", name)
+	}
+}
+
+// TestIntegrationMultiReplicaRotationOverlap covers step 2 of the rotation
+// documented on WithKeySet: one replica already signs with the new key while
+// another still signs with the old one, and each verifies the other's tokens.
+func TestIntegrationMultiReplicaRotationOverlap(t *testing.T) {
+	oldKey, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	newKey, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	store := newJSONStore()
+	cfg := replicaConfig(t)
+	_, rotated := newReplica(t, cfg, WithKeySet(newKey, oldKey), WithStore(store))
+	_, lagging := newReplica(t, cfg, WithKeySet(oldKey, newKey), WithStore(store))
+
+	verifyWithJWKSFrom(t, lagging, enrollAcross(t, rotated, rotated, rotated))
+	verifyWithJWKSFrom(t, rotated, enrollAcross(t, lagging, lagging, lagging))
 }

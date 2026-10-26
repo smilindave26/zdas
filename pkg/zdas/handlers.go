@@ -1,6 +1,7 @@
 package zdas
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -13,14 +14,17 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Handlers groups the HTTP handler dependencies for the ZDAS endpoints.
 type Handlers struct {
 	cfg         Config
-	keys        *KeySet
+	keys        *KeySet   // active signing key
+	jwksKeys    []*KeySet // keys served at /.well-known/jwks.json: keys first, unique by kid
 	registry    *ProviderRegistry
-	store       *SessionStore
+	store       Store
+	rawKeys     bool                  // store entries under their raw IDs (NewHandlers only)
 	discovery   *Discovery            // for cached network JWTs; may be nil in tests
 	reconciler  *Reconciler           // nil when fallback is disabled
 	provisioner EnrollmentProvisioner // nil uses built-in ComposeClaims
@@ -31,9 +35,29 @@ type Handlers struct {
 // NewHandlers creates a Handlers with the given dependencies. discovery,
 // reconciler, and provisioner may be nil.
 func NewHandlers(cfg Config, keys *KeySet, registry *ProviderRegistry, store *SessionStore, discovery *Discovery, reconciler *Reconciler, provisioner EnrollmentProvisioner, logger *slog.Logger) *Handlers {
+	if store != nil {
+		// Expire entries by the store's own TTLs, which the caller may have
+		// set differently from cfg.Session when building the store.
+		cfg.Session.Timeout, cfg.Session.CodeExpiry = store.sessionTTL, store.codeTTL
+	}
+	h := newHandlers(cfg, keys, nil, registry, sessionStoreAdapter{store}, discovery, reconciler, provisioner, logger)
+	// Callers may populate the SessionStore directly and pass the IDs it
+	// returns to the endpoints, so entries stay keyed by raw ID.
+	h.rawKeys = true
+	return h
+}
+
+// newHandlers creates a Handlers that signs with keys, publishes keys plus
+// verifyKeys, and expires store entries by cfg.Session.
+func newHandlers(cfg Config, keys *KeySet, verifyKeys []*KeySet, registry *ProviderRegistry, store Store, discovery *Discovery, reconciler *Reconciler, provisioner EnrollmentProvisioner, logger *slog.Logger) *Handlers {
+	var jwksKeys []*KeySet
+	if keys != nil {
+		jwksKeys = uniqueKeySets(keys, verifyKeys)
+	}
 	h := &Handlers{
 		cfg:         cfg,
 		keys:        keys,
+		jwksKeys:    jwksKeys,
 		registry:    registry,
 		store:       store,
 		discovery:   discovery,
@@ -114,7 +138,7 @@ func (h *Handlers) handleExtJWTSigners(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) handleJWKS(w http.ResponseWriter, r *http.Request) {
-	data, err := h.keys.PublicJWKS()
+	data, err := publicJWKS(h.jwksKeys)
 	if err != nil {
 		h.logger.Error("marshal jwks", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -254,7 +278,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sess.ZDASCodeVerifier = verifier
-		sessionState, err := h.store.CreateSession(sess)
+		sessionState, err := h.createSession(r.Context(), sess)
 		if err != nil {
 			h.logger.Error("create session", "error", err)
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "internal error")
@@ -272,7 +296,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		upstreamURL = oidcProv.authURL + "?" + v.Encode()
 	} else {
 		// Non-OIDC (e.g. GitHub): no upstream PKCE.
-		sessionState, err := h.store.CreateSession(sess)
+		sessionState, err := h.createSession(r.Context(), sess)
 		if err != nil {
 			h.logger.Error("create session", "error", err)
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "internal error")
@@ -298,7 +322,12 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		desc := q.Get("error_description")
 		h.logger.Warn("upstream returned error", "error", errParam, "description", desc)
 		// We need the session to know the tunneler's redirect_uri.
-		sess := h.store.GetSession(sessionState)
+		sess, err := h.consumeSession(r.Context(), sessionState)
+		if err != nil {
+			h.logger.Error("consume session", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		if sess == nil {
 			http.Error(w, "session not found or expired", http.StatusBadRequest)
 			return
@@ -307,7 +336,12 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := h.store.GetSession(sessionState)
+	sess, err := h.consumeSession(r.Context(), sessionState)
+	if err != nil {
+		h.logger.Error("consume session", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if sess == nil {
 		http.Error(w, "session not found or expired", http.StatusBadRequest)
 		return
@@ -358,7 +392,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if result.RedirectURL != "" && result.Claims == nil {
 			// Interactive provisioning - stash session state and redirect.
-			pendingID, err := h.store.CreatePendingProvision(&PendingProvision{
+			pendingID, err := h.createPendingProvision(r.Context(), &PendingProvision{
 				TunnelerRedirectURI:         sess.TunnelerRedirectURI,
 				TunnelerState:               sess.TunnelerState,
 				TunnelerCodeChallenge:       sess.TunnelerCodeChallenge,
@@ -374,7 +408,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(result.RedirectURL, "?") {
 				sep = "&"
 			}
-			http.Redirect(w, r, result.RedirectURL+sep+"pending_id="+pendingID, http.StatusFound)
+			http.Redirect(w, r, result.RedirectURL+sep+"pending_id="+url.QueryEscape(pendingID), http.StatusFound)
 			return
 		}
 		claims = result.Claims
@@ -397,7 +431,7 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		CodeChallengeMethod: sess.TunnelerCodeChallengeMethod,
 		IsFallback:          sess.FallbackNonce != "",
 	}
-	zdasCode, err := h.store.CreateCode(ac)
+	zdasCode, err := h.createCode(r.Context(), ac)
 	if err != nil {
 		h.logger.Error("create auth code", "error", err)
 		oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, "server_error", "internal error")
@@ -436,7 +470,12 @@ func (h *Handlers) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ac := h.store.ConsumeCode(code)
+	ac, err := h.consumeCode(r.Context(), code)
+	if err != nil {
+		h.logger.Error("consume code", "error", err)
+		tokenError(w, "server_error", "internal error")
+		return
+	}
 	if ac == nil {
 		tokenError(w, "invalid_grant", "code is invalid, expired, or already used")
 		return
@@ -585,7 +624,12 @@ func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Reques
 		body.Claims = nil
 	}
 
-	pp := h.store.ConsumePendingProvision(pendingID)
+	pp, err := h.consumePendingProvision(r.Context(), pendingID)
+	if err != nil {
+		h.logger.Error("consume pending provision", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if pp == nil {
 		http.Error(w, "pending provision not found or expired", http.StatusBadRequest)
 		return
@@ -614,7 +658,7 @@ func (h *Handlers) handleProvisionComplete(w http.ResponseWriter, r *http.Reques
 		CodeChallengeMethod: pp.TunnelerCodeChallengeMethod,
 		IsFallback:          pp.IsFallback,
 	}
-	zdasCode, err := h.store.CreateCode(ac)
+	zdasCode, err := h.createCode(r.Context(), ac)
 	if err != nil {
 		h.logger.Error("create auth code from provision", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -649,6 +693,114 @@ func oidcErrorRedirect(w http.ResponseWriter, r *http.Request, redirectURI, stat
 		v.Set("state", state)
 	}
 	http.Redirect(w, r, redirectURI+"?"+v.Encode(), http.StatusFound)
+}
+
+// storeKey returns the key the entry of the given kind and ID is stored
+// under. See Store for why it is a hash.
+func (h *Handlers) storeKey(kind, id string) string {
+	if h.rawKeys {
+		return id
+	}
+	return hashStoreKey(kind, h.cfg.Token.Issuer, id)
+}
+
+// createSession stamps sess with the current time, stores it under a new
+// ID, and returns the ID.
+func (h *Handlers) createSession(ctx context.Context, sess *AuthSession) (string, error) {
+	id, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	sess.CreatedAt = time.Now()
+	if err := h.store.CreateSession(ctx, h.storeKey(kindSession, id), sess); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// createCode is createSession for authorization codes.
+func (h *Handlers) createCode(ctx context.Context, ac *AuthCode) (string, error) {
+	code, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	ac.CreatedAt = time.Now()
+	if err := h.store.CreateCode(ctx, h.storeKey(kindCode, code), ac); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// createPendingProvision is createSession for pending provisions.
+func (h *Handlers) createPendingProvision(ctx context.Context, pp *PendingProvision) (string, error) {
+	id, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	pp.CreatedAt = time.Now()
+	if err := h.store.CreatePendingProvision(ctx, h.storeKey(kindProvision, id), pp); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// consumeSession consumes an auth session and treats one that is no longer
+// fresh as a miss, so a Store without expiry logic of its own never hands
+// back an expired session. A malformed ID is a miss without a store lookup.
+// It returns (nil, nil) on a miss.
+func (h *Handlers) consumeSession(ctx context.Context, id string) (*AuthSession, error) {
+	if !validID(id) {
+		return nil, nil
+	}
+	sess, err := h.store.ConsumeSession(ctx, h.storeKey(kindSession, id))
+	if err != nil || sess == nil || !h.fresh(kindSession, sess.CreatedAt, h.cfg.Session.Timeout) {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// consumeCode is consumeSession for authorization codes, checked against the
+// code expiry.
+func (h *Handlers) consumeCode(ctx context.Context, code string) (*AuthCode, error) {
+	if !validID(code) {
+		return nil, nil
+	}
+	ac, err := h.store.ConsumeCode(ctx, h.storeKey(kindCode, code))
+	if err != nil || ac == nil || !h.fresh(kindCode, ac.CreatedAt, h.cfg.Session.CodeExpiry) {
+		return nil, err
+	}
+	return ac, nil
+}
+
+// consumePendingProvision is consumeSession for pending provisions, checked
+// against the session timeout.
+func (h *Handlers) consumePendingProvision(ctx context.Context, id string) (*PendingProvision, error) {
+	if !validID(id) {
+		return nil, nil
+	}
+	pp, err := h.store.ConsumePendingProvision(ctx, h.storeKey(kindProvision, id))
+	if err != nil || pp == nil || !h.fresh(kindProvision, pp.CreatedAt, h.cfg.Session.Timeout) {
+		return nil, err
+	}
+	return pp, nil
+}
+
+// fresh reports whether an entry created at createdAt is still within ttl.
+// A zero CreatedAt, or one further in the future than clock skew explains,
+// means the store did not return the entry as stored; those are logged so
+// they do not pass for ordinary expiry.
+func (h *Handlers) fresh(kind string, createdAt time.Time, ttl time.Duration) bool {
+	age := time.Since(createdAt)
+	switch {
+	case createdAt.IsZero():
+		h.logger.Warn("store returned entry without CreatedAt, treating as expired", "kind", kind)
+		return false
+	case age < -maxClockSkew:
+		h.logger.Warn("store returned entry created in the future, treating as expired",
+			"kind", kind, "created_at", createdAt)
+		return false
+	}
+	return age <= ttl
 }
 
 // tokenError writes a JSON error response for the /token endpoint.

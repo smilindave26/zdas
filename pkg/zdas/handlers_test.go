@@ -451,7 +451,7 @@ func TestTokenEndpointFullFlow(t *testing.T) {
 		Raw:      map[string]interface{}{"preferred_username": "alice"},
 	}, &DeviceInfo{DeviceName: "macbook"}, "")
 
-	code, err := h.store.CreateCode(&AuthCode{
+	code, err := h.createCode(t.Context(), &AuthCode{
 		Claims:              claims,
 		RedirectURI:         "https://tunneler/cb",
 		CodeChallenge:       challenge,
@@ -497,7 +497,7 @@ func TestTokenEndpointRejectsReplay(t *testing.T) {
 	mux := h.Mux()
 	verifier, challenge := generateTestPKCE(t)
 
-	code, _ := h.store.CreateCode(&AuthCode{
+	code, _ := h.createCode(t.Context(), &AuthCode{
 		Claims:              map[string]interface{}{"sub": "x"},
 		RedirectURI:         "https://tunneler/cb",
 		CodeChallenge:       challenge,
@@ -540,7 +540,7 @@ func TestTokenEndpointBadPKCE(t *testing.T) {
 	mux := h.Mux()
 	_, challenge := generateTestPKCE(t)
 
-	code, _ := h.store.CreateCode(&AuthCode{
+	code, _ := h.createCode(t.Context(), &AuthCode{
 		Claims:              map[string]interface{}{"sub": "x"},
 		RedirectURI:         "https://tunneler/cb",
 		CodeChallenge:       challenge,

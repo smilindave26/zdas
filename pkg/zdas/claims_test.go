@@ -1,7 +1,9 @@
 package zdas
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jws"
@@ -217,4 +219,78 @@ func TestMintTokenRoundtrip(t *testing.T) {
 	if tok.Subject() != extID {
 		t.Errorf("sub = %q, device_external_id = %q, want equal", tok.Subject(), extID)
 	}
+}
+
+// TestClaimsSurviveJSONRoundTrip verifies that AuthCode.Claims can be held in
+// an external Store: claims decoded from JSON, where numbers become float64
+// and arrays []interface{}, must mint the same token claims as the originals.
+func TestClaimsSurviveJSONRoundTrip(t *testing.T) {
+	ks, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	identity := &UpstreamIdentity{
+		Subject:  "u1",
+		Username: "alice",
+		Issuer:   "https://idp",
+		Raw:      map[string]interface{}{"preferred_username": "alice"},
+	}
+	fbCfg := FallbackConfig{Enabled: true}
+	tokenCfg := TokenConfig{Issuer: "https://zdas.test", Audience: "ziti", Expiry: time.Minute}
+
+	for name, claims := range map[string]map[string]interface{}{
+		"composed":         ComposeClaims(defaultClaimsConfig(), fbCfg, identity, &DeviceInfo{DeviceName: "laptop", OS: "darwin"}, ""),
+		"composedFallback": ComposeClaims(defaultClaimsConfig(), fbCfg, identity, &DeviceInfo{}, "0123456789abcdef"),
+		"provisioner": {
+			"sub":       "ext-1",
+			"jti":       "j1",
+			"nbf":       time.Now().Unix(),
+			"count":     42,
+			"ratio":     0.5,
+			"groups":    []string{"a", "b"},
+			"enabled":   true,
+			"structure": map[string]interface{}{"k": []int{1, 2}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := json.Marshal(claims)
+			if err != nil {
+				t.Fatalf("marshal claims: %v", err)
+			}
+			var decoded map[string]interface{}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("unmarshal claims: %v", err)
+			}
+			want := mintedClaims(t, tokenCfg, claims, ks)
+			got := mintedClaims(t, tokenCfg, decoded, ks)
+			if got != want {
+				t.Errorf("claims changed by JSON round trip:\n got  %s\n want %s", got, want)
+			}
+		})
+	}
+}
+
+// mintedClaims mints a token from claims and returns its payload as JSON,
+// without iat and exp, which differ between calls.
+func mintedClaims(t *testing.T, cfg TokenConfig, claims map[string]interface{}, ks *KeySet) string {
+	t.Helper()
+	signed, err := MintToken(cfg, claims, ks)
+	if err != nil {
+		t.Fatalf("MintToken: %v", err)
+	}
+	payload, err := jws.ParseString(signed)
+	if err != nil {
+		t.Fatalf("parse jws: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload.Payload(), &m); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	delete(m, "iat")
+	delete(m, "exp")
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return string(out)
 }

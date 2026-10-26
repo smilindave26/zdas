@@ -112,6 +112,18 @@ mux.Handle("/device-auth/", http.StripPrefix("/device-auth", handler))
 handler.Stop()
 ```
 
+To run several replicas behind a load balancer, give every replica the same signing key and a shared store for in-flight enrollments:
+
+```go
+ks, err := zdas.NewKeySet(privateKey) // the same EC P-256 key on every replica
+handler, err := zdas.NewHandler(cfg, logger,
+	zdas.WithKeySet(ks),
+	zdas.WithStore(myStore), // your zdas.Store, e.g. backed by a database
+)
+```
+
+`WithKeySet` documents how to rotate keys across replicas, and `zdastest.TestStore` is a conformance suite for your `Store` implementation.
+
 Or use the provider layer on its own to federate login to an upstream IdP without the enrollment handlers:
 
 ```go
@@ -135,14 +147,16 @@ See the package documentation for the compatibility promise covering both uses.
 cmd/zdas/          standalone binary
 pkg/zdas/
   config.go        configuration and validation
-  keys.go          EC P-256 key generation and JWKS
+  keys.go          EC P-256 signing keys and JWKS
   provider.go      UpstreamProvider interface and registry
   oidc.go          OIDC provider (from discovered signers)
   github.go        GitHub OAuth provider
   discovery.go     controller-driven IdP discovery
   claims.go        claim composition and JWT minting
   handlers.go      HTTP endpoints (/authorize, /callback, /token, OIDC discovery, JWKS)
-  session.go       in-memory session and auth code store
+  store.go         Store interface for in-flight enrollment state
+  session.go       in-memory session and auth code store (the default Store)
+  zdastest/        conformance suite for Store implementations
   identity.go      OpenZiti identity file parsing and management API auth
   reconciler.go    fallback identity reconciliation
   server.go        server assembly and TLS modes

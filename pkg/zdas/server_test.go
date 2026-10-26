@@ -1,10 +1,13 @@
 package zdas
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -198,4 +201,82 @@ func TestNewServerOIDCProviderDiscoveryFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected NewServer to fail when configured OIDC provider is unreachable")
 	}
+}
+
+// TestNewServerKeyOptions verifies that NewServer generates and logs a key
+// when WithKeySet is absent, and uses and logs the injected key otherwise.
+func TestNewServerKeyOptions(t *testing.T) {
+	cfg := replicaConfig(t)
+
+	var buf bytes.Buffer
+	srv, err := NewServer(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { srv.Shutdown(context.Background()) })
+	if !strings.Contains(buf.String(), `msg="generated signing key" kid=`+srv.keys.KID()) {
+		t.Errorf("default path log = %q, want generated signing key", buf.String())
+	}
+
+	active, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	verify, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	buf.Reset()
+	injected, err := NewServer(cfg, slog.New(slog.NewTextHandler(&buf, nil)), WithKeySet(active, verify))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { injected.Shutdown(context.Background()) })
+	if injected.keys != active {
+		t.Error("NewServer did not use the injected key")
+	}
+	if got := buf.String(); strings.Contains(got, "generated signing key") ||
+		!strings.Contains(got, `msg="using injected signing key" kid=`+active.KID()) ||
+		!strings.Contains(got, verify.KID()) {
+		t.Errorf("injected path log = %q, want injected kid and verify-only kid", got)
+	}
+}
+
+// TestNewServerRejectsNilOptions verifies that a nil key or store fails
+// NewServer rather than silently falling back to a per-process default,
+// which would break a multi-replica deployment without any error.
+func TestNewServerRejectsNilOptions(t *testing.T) {
+	cfg := replicaConfig(t)
+	ks, err := GenerateKeySet()
+	if err != nil {
+		t.Fatalf("GenerateKeySet: %v", err)
+	}
+	for name, opt := range map[string]Option{
+		"nil active":      WithKeySet(nil),
+		"nil verify-only": WithKeySet(ks, nil),
+		"nil store":       WithStore(nil),
+	} {
+		if srv, err := NewServer(cfg, slog.Default(), opt); err == nil {
+			srv.Shutdown(context.Background())
+			t.Errorf("%s: NewServer succeeded, want error", name)
+		}
+	}
+}
+
+// TestNewServerInjectedStoreNotOwned verifies that a server given a Store
+// does not create, and so never stops, a SessionStore of its own.
+func TestNewServerInjectedStoreNotOwned(t *testing.T) {
+	cfg := replicaConfig(t)
+	srv, err := NewServer(cfg, slog.Default(), WithStore(newJSONStore()))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	if srv.store != nil {
+		t.Error("server created a SessionStore despite WithStore")
+	}
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Errorf("Shutdown: %v", err)
+	}
+	h := &Handler{srv: srv}
+	h.Stop() // must not panic on the nil store
 }
