@@ -117,55 +117,62 @@ func TestAuthorizeSetsBindingCookie(t *testing.T) {
 func TestCallbackRequiresBindingCookie(t *testing.T) {
 	cases := []struct {
 		name   string
-		cookie func(started *httptest.ResponseRecorder, sessID string, other *http.Cookie) *http.Cookie
-		want   int
+		cookie func(sessID string, other *http.Cookie) *http.Cookie
 	}{
-		{"matching cookie", func(started *httptest.ResponseRecorder, _ string, _ *http.Cookie) *http.Cookie {
-			return started.Result().Cookies()[0]
-		}, http.StatusFound},
-		{"no cookie", func(*httptest.ResponseRecorder, string, *http.Cookie) *http.Cookie {
-			return nil
-		}, http.StatusForbidden},
-		{"wrong value", func(_ *httptest.ResponseRecorder, sessID string, _ *http.Cookie) *http.Cookie {
+		{"no cookie", func(string, *http.Cookie) *http.Cookie { return nil }},
+		{"wrong value", func(sessID string, _ *http.Cookie) *http.Cookie {
 			return &http.Cookie{Name: bindingCookieName(sessID), Value: strings.Repeat("0", 32)}
-		}, http.StatusForbidden},
-		{"another session's cookie", func(_ *httptest.ResponseRecorder, _ string, other *http.Cookie) *http.Cookie {
-			return other
-		}, http.StatusForbidden},
-		{"another session's nonce under this name", func(_ *httptest.ResponseRecorder, sessID string, other *http.Cookie) *http.Cookie {
+		}},
+		{"malformed value", func(sessID string, _ *http.Cookie) *http.Cookie {
+			return &http.Cookie{Name: bindingCookieName(sessID), Value: "x"}
+		}},
+		{"another session's cookie", func(_ string, other *http.Cookie) *http.Cookie { return other }},
+		{"another session's nonce under this name", func(sessID string, other *http.Cookie) *http.Cookie {
 			return &http.Cookie{Name: bindingCookieName(sessID), Value: other.Value}
-		}, http.StatusForbidden},
+		}},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			mux := bindingHandlers(t, "https://zdas.example.com")
-			started, sessID := startAuthorize(t, mux)
-			// An attacker can start their own flow and hold its cookie.
-			attacker, _ := startAuthorize(t, mux)
+		for _, query := range []string{"code=c", "error=access_denied"} {
+			t.Run(tc.name+"/"+query, func(t *testing.T) {
+				mux := bindingHandlers(t, "https://zdas.example.com")
+				started, sessID := startAuthorize(t, mux)
+				// An attacker can start their own flow and hold its cookie.
+				attacker, _ := startAuthorize(t, mux)
 
-			req := httptest.NewRequest(http.MethodGet, "/callback?code=c&state="+sessID, nil)
-			if c := tc.cookie(started, sessID, attacker.Result().Cookies()[0]); c != nil {
-				req.AddCookie(c)
-			}
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
-			if w.Code != tc.want {
-				t.Fatalf("status = %d, want %d, body = %s", w.Code, tc.want, w.Body.String())
-			}
-			if tc.want == http.StatusFound && !strings.HasPrefix(w.Header().Get("Location"), "http://localhost:20314/auth/callback?") {
-				t.Errorf("Location = %q, want the tunneler callback", w.Header().Get("Location"))
-			}
-			// The session is spent either way, so its cookie is expired.
-			cleared := false
-			for _, c := range w.Result().Cookies() {
-				if c.Name == bindingCookieName(sessID) && c.MaxAge < 0 {
-					cleared = true
+				target := "/callback?" + query + "&state=" + sessID
+				req := httptest.NewRequest(http.MethodGet, target, nil)
+				if c := tc.cookie(sessID, attacker.Result().Cookies()[0]); c != nil {
+					req.AddCookie(c)
 				}
-			}
-			if !cleared {
-				t.Error("binding cookie not expired")
-			}
-		})
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, req)
+				if w.Code != http.StatusBadRequest {
+					t.Fatalf("wrong browser: status = %d, want 400, body = %s", w.Code, w.Body.String())
+				}
+				if loc := w.Header().Get("Location"); loc != "" {
+					t.Errorf("wrong browser: Location = %q, want none", loc)
+				}
+
+				// The session is still there for the browser that started it.
+				w = httptest.NewRecorder()
+				mux.ServeHTTP(w, browserRequest(started, target))
+				if w.Code != http.StatusFound {
+					t.Fatalf("right browser: status = %d, want 302, body = %s", w.Code, w.Body.String())
+				}
+				if !strings.HasPrefix(w.Header().Get("Location"), "http://localhost:20314/auth/callback?") {
+					t.Errorf("right browser: Location = %q, want the tunneler callback", w.Header().Get("Location"))
+				}
+				cleared := false
+				for _, c := range w.Result().Cookies() {
+					if c.Name == bindingCookieName(sessID) && c.MaxAge < 0 {
+						cleared = true
+					}
+				}
+				if !cleared {
+					t.Error("binding cookie not expired after the session was consumed")
+				}
+			})
+		}
 	}
 }
 

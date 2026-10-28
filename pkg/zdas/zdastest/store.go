@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +39,6 @@ func TestStore(t *testing.T, newStore func(t *testing.T) zdas.Store) {
 			ClientType:           "cli",
 			ZDASCodeVerifier:     "verifier",
 			UpstreamProviderName: "keycloak",
-			BrowserBindingHash:   strings.Repeat("ab", 32),
 			CreatedAt:            time.Now(),
 		}
 		key := newKey(t)

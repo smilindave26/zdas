@@ -299,9 +299,10 @@ func TestStoreKeysAreHashedAndStamped(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := loc.Query().Get("state")
+	nonce := w.Result().Cookies()[0].Value
 
 	keys := store.keys()
-	want := hashStoreKey(kindSession, "https://zdas.example.com", state)
+	want := hashStoreKey(kindSession, "https://zdas.example.com", state+"."+nonce)
 	if len(keys) != 1 || keys[0] != want {
 		t.Fatalf("store keys = %v, want [%s]", keys, want)
 	}
