@@ -16,12 +16,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Build with the latest patched toolchain, not the go.mod minimum, so
+      # binaries carry current standard library security fixes.
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
 
       - name: Run tests
         run: go test -race -count=1 ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
       - name: Build binaries
         run: |

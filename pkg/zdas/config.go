@@ -52,11 +52,16 @@ type Config struct {
 	IDPSelectorURL string `yaml:"idp_selector_url"`
 
 	// AllowedRedirectURIs restricts which redirect_uri values the /authorize
-	// endpoint will accept. Each entry is a prefix: a request's redirect_uri
-	// must start with one of these strings. When empty, any http(s) URL is
-	// accepted (permissive, for development or when PKCE is the sole defense).
-	// In production, set this to the expected tunneler callback patterns, e.g.
-	// ["http://localhost:", "http://127.0.0.1:"].
+	// endpoint will accept. When empty (the default), only loopback
+	// callbacks are accepted: http or https to "localhost" or a loopback IP
+	// literal, on any port. Tunnelers always use one, so most deployments
+	// should leave this unset.
+	//
+	// When set, it replaces the loopback default. A redirect_uri matches an
+	// entry when the parsed scheme, host and port are equal, and the path
+	// too if the entry has one. An entry for a loopback host with no port,
+	// such as "http://localhost", matches any port. Entries are URLs, not
+	// string prefixes, and a redirect_uri with userinfo never matches.
 	AllowedRedirectURIs []string        `yaml:"allowed_redirect_uris"`
 	RateLimit           RateLimitConfig `yaml:"rate_limit"`
 }
@@ -311,6 +316,11 @@ func (c *Config) Validate() error {
 			!strings.HasPrefix(c.IDPSelectorURL, "https://") &&
 			!strings.HasPrefix(c.IDPSelectorURL, "/") {
 			return errors.New("idp_selector_url must be an http(s) URL or an absolute path")
+		}
+	}
+	for i, raw := range c.AllowedRedirectURIs {
+		if _, err := parseRedirectURI(raw); err != nil {
+			return fmt.Errorf("allowed_redirect_uris[%d] %q: %w", i, raw, err)
 		}
 	}
 	return nil

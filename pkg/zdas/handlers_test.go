@@ -127,7 +127,7 @@ func TestHandleAuthorizeMissingDeviceNameFallbackDisabled(t *testing.T) {
 	mux := h.Mux()
 	_, challenge := generateTestPKCE(t)
 
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func TestHandleAuthorizeFallbackEnabled(t *testing.T) {
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -202,7 +202,7 @@ func TestHandleAuthorizeIDPSelector(t *testing.T) {
 
 	_, challenge := generateTestPKCE(t)
 	// Multiple providers, no selection yet - should show selector page.
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -263,7 +263,7 @@ func TestIDPSelectorURLUnsetRendersBuiltinPicker(t *testing.T) {
 	// param -> built-in picker page rendered inline.
 	mux := idpSelectorHandlers(t, "")
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -280,7 +280,7 @@ func TestIDPSelectorURLUnsetRendersBuiltinPicker(t *testing.T) {
 func TestIDPSelectorURLRedirectsWithProvidersAndQuery(t *testing.T) {
 	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp")
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -307,7 +307,7 @@ func TestIDPSelectorURLRedirectsWithProvidersAndQuery(t *testing.T) {
 	if loc.Query().Get("device_name") != "laptop" {
 		t.Errorf("device_name = %q", loc.Query().Get("device_name"))
 	}
-	if loc.Query().Get("redirect_uri") != "https://tunneler/cb" {
+	if loc.Query().Get("redirect_uri") != "http://localhost:20314/auth/callback" {
 		t.Errorf("redirect_uri = %q", loc.Query().Get("redirect_uri"))
 	}
 }
@@ -331,7 +331,7 @@ func TestIDPSelectorURLSingleProviderSkipsPicker(t *testing.T) {
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -352,7 +352,7 @@ func TestIDPSelectorURLIDPSuppliedSkipsPicker(t *testing.T) {
 	// ZDAS must skip the picker and go straight to the chosen upstream.
 	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp")
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop&idp=github"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -372,7 +372,7 @@ func TestIDPSelectorURLAppendsToExistingQuery(t *testing.T) {
 	// /authorize params must be appended with "&", producing exactly one "?".
 	mux := idpSelectorHandlers(t, "https://app.example.com/pick-idp?source=zdas")
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -405,7 +405,7 @@ func TestHandleAuthorizeMissingPKCE(t *testing.T) {
 	h, _ := setupHandlers(t)
 	mux := h.Mux()
 
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1&device_name=laptop"
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -421,7 +421,7 @@ func TestHandleAuthorizeRedirects(t *testing.T) {
 	mux := h.Mux()
 	_, challenge := generateTestPKCE(t)
 
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 	w := httptest.NewRecorder()
@@ -453,7 +453,7 @@ func TestTokenEndpointFullFlow(t *testing.T) {
 
 	code, err := h.createCode(t.Context(), &AuthCode{
 		Claims:              claims,
-		RedirectURI:         "https://tunneler/cb",
+		RedirectURI:         "http://localhost:20314/auth/callback",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 	})
@@ -464,7 +464,7 @@ func TestTokenEndpointFullFlow(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 		"client_id":     {"ziti-enrolltocert"},
 	}
@@ -499,7 +499,7 @@ func TestTokenEndpointRejectsReplay(t *testing.T) {
 
 	code, _ := h.createCode(t.Context(), &AuthCode{
 		Claims:              map[string]interface{}{"sub": "x"},
-		RedirectURI:         "https://tunneler/cb",
+		RedirectURI:         "http://localhost:20314/auth/callback",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 	})
@@ -507,7 +507,7 @@ func TestTokenEndpointRejectsReplay(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 
@@ -542,7 +542,7 @@ func TestTokenEndpointBadPKCE(t *testing.T) {
 
 	code, _ := h.createCode(t.Context(), &AuthCode{
 		Claims:              map[string]interface{}{"sub": "x"},
-		RedirectURI:         "https://tunneler/cb",
+		RedirectURI:         "http://localhost:20314/auth/callback",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 	})
@@ -550,7 +550,7 @@ func TestTokenEndpointBadPKCE(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {"wrong-verifier"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
@@ -630,7 +630,7 @@ func TestCallbackToTokenFullFlow(t *testing.T) {
 	// Pre-create a session as if /authorize had run.
 	verifier, challenge := generateTestPKCE(t)
 	sessID, _ := store.CreateSession(&AuthSession{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
@@ -663,7 +663,7 @@ func TestCallbackToTokenFullFlow(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 	req = httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))

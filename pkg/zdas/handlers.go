@@ -30,6 +30,10 @@ type Handlers struct {
 	provisioner EnrollmentProvisioner // nil uses built-in ComposeClaims
 	rateLimiter *ipRateLimiter        // nil when rate limiting is disabled
 	logger      *slog.Logger
+
+	// Scope of the browser binding cookie, from cfg.ExternalURL.
+	cookiePath   string
+	cookieSecure bool
 }
 
 // NewHandlers creates a Handlers with the given dependencies. discovery,
@@ -65,6 +69,7 @@ func newHandlers(cfg Config, keys *KeySet, verifyKeys []*KeySet, registry *Provi
 		provisioner: provisioner,
 		logger:      logger,
 	}
+	h.cookiePath, h.cookieSecure = bindingCookieScope(cfg.ExternalURL)
 	if cfg.RateLimit.AuthorizePerSecond > 0 {
 		burst := cfg.RateLimit.AuthorizeBurst
 		if burst == 0 {
@@ -175,23 +180,14 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "redirect_uri is required", http.StatusBadRequest)
 		return
 	}
-	parsedRedirect, err := url.Parse(redirectURI)
-	if err != nil || (parsedRedirect.Scheme != "http" && parsedRedirect.Scheme != "https") {
+	parsedRedirect, err := parseRedirectURI(redirectURI)
+	if err != nil {
 		http.Error(w, "redirect_uri must be a valid http(s) URL", http.StatusBadRequest)
 		return
 	}
-	if len(h.cfg.AllowedRedirectURIs) > 0 {
-		allowed := false
-		for _, prefix := range h.cfg.AllowedRedirectURIs {
-			if strings.HasPrefix(redirectURI, prefix) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			http.Error(w, "redirect_uri is not in the allowed list", http.StatusBadRequest)
-			return
-		}
+	if !redirectAllowed(parsedRedirect, h.cfg.AllowedRedirectURIs) {
+		http.Error(w, "redirect_uri is not allowed", http.StatusBadRequest)
+		return
 	}
 
 	// Validate remaining required parameters.
@@ -278,7 +274,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sess.ZDASCodeVerifier = verifier
-		sessionState, err := h.createSession(r.Context(), sess)
+		sessionState, err := h.startSession(w, r, sess)
 		if err != nil {
 			h.logger.Error("create session", "error", err)
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "internal error")
@@ -296,7 +292,7 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		upstreamURL = oidcProv.authURL + "?" + v.Encode()
 	} else {
 		// Non-OIDC (e.g. GitHub): no upstream PKCE.
-		sessionState, err := h.createSession(r.Context(), sess)
+		sessionState, err := h.startSession(w, r, sess)
 		if err != nil {
 			h.logger.Error("create session", "error", err)
 			oidcErrorRedirect(w, r, redirectURI, state, "server_error", "internal error")
@@ -344,6 +340,11 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess == nil {
 		http.Error(w, "session not found or expired", http.StatusBadRequest)
+		return
+	}
+	if !h.browserBound(w, r, sessionState, sess) {
+		h.logger.Warn("callback from a browser that did not start the session", "provider", sess.UpstreamProviderName)
+		http.Error(w, "enrollment must be completed in the browser that started it", http.StatusForbidden)
 		return
 	}
 

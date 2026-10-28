@@ -86,6 +86,7 @@ Key settings:
 | `claims.name_template` | Template for identity names. Placeholders: `{username}`, `{device_name}`, `{hostname}`, `{os}`, `{arch}` | `{username}-{device_name}` |
 | `token.expiry` | How long enrollment tokens are valid | `5m` |
 | `tls.mode` | `none`, `static`, or `acme` | `none` |
+| `allowed_redirect_uris` | URLs `/authorize` may redirect back to, matched on scheme, host and port | loopback only |
 
 Environment variable overrides follow the pattern `ZDAS_SECTION_FIELD`, e.g. `ZDAS_CONTROLLER_API_URL`, `ZDAS_FALLBACK_ENABLED`, `ZDAS_PROVIDER_GITHUB_CLIENT_SECRET`.
 
@@ -111,6 +112,8 @@ mux.Handle("/device-auth/", http.StripPrefix("/device-auth", handler))
 // ... on shutdown:
 handler.Stop()
 ```
+
+Set `external_url` to the public URL including the mount prefix (`https://example.com/device-auth` above). ZDAS scopes the cookie that binds an enrollment to the browser that started it to that path.
 
 To run several replicas behind a load balancer, give every replica the same signing key and a shared store for in-flight enrollments:
 
@@ -154,6 +157,8 @@ pkg/zdas/
   discovery.go     controller-driven IdP discovery
   claims.go        claim composition and JWT minting
   handlers.go      HTTP endpoints (/authorize, /callback, /token, OIDC discovery, JWKS)
+  redirect.go      redirect_uri validation (loopback by default)
+  binding.go       cookie binding /callback to the browser that started /authorize
   store.go         Store interface for in-flight enrollment state
   session.go       in-memory session and auth code store (the default Store)
   zdastest/        conformance suite for Store implementations

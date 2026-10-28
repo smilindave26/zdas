@@ -89,7 +89,7 @@ func TestIntegrationOIDCFlow(t *testing.T) {
 	// 4. Tunneler sends /authorize.
 	verifier, challenge := generateTestPKCE(t)
 	authReq := "/authorize?" + url.Values{
-		"redirect_uri":          {"https://tunneler/cb"},
+		"redirect_uri":          {"http://localhost:20314/auth/callback"},
 		"response_type":         {"code"},
 		"state":                 {"tunneler-state-abc"},
 		"code_challenge":        {challenge},
@@ -122,8 +122,9 @@ func TestIntegrationOIDCFlow(t *testing.T) {
 		"state": {sessionState},
 	}.Encode()
 
+	req := browserRequest(w, callbackReq)
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, callbackReq, nil))
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
@@ -144,7 +145,7 @@ func TestIntegrationOIDCFlow(t *testing.T) {
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 		"client_id":     {"ziti-enrolltocert"},
 	}
@@ -273,7 +274,7 @@ func TestIntegrationGitHubFlow(t *testing.T) {
 	// Tunneler sends /authorize.
 	verifier, challenge := generateTestPKCE(t)
 	authReq := "/authorize?" + url.Values{
-		"redirect_uri":          {"https://tunneler/cb"},
+		"redirect_uri":          {"http://localhost:20314/auth/callback"},
 		"response_type":         {"code"},
 		"state":                 {"gh-state"},
 		"code_challenge":        {challenge},
@@ -291,9 +292,9 @@ func TestIntegrationGitHubFlow(t *testing.T) {
 	sessionState := upstreamRedirect.Query().Get("state")
 
 	// Simulate GitHub callback.
-	callbackReq := "/callback?code=gh-code&state=" + sessionState
+	req := browserRequest(w, "/callback?code=gh-code&state="+sessionState)
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, callbackReq, nil))
+	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -304,7 +305,7 @@ func TestIntegrationGitHubFlow(t *testing.T) {
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
@@ -413,7 +414,7 @@ func TestIntegrationFallbackFlow(t *testing.T) {
 	// Tunneler sends /authorize WITHOUT device_name.
 	verifier, challenge := generateTestPKCE(t)
 	authReq := "/authorize?" + url.Values{
-		"redirect_uri":          {"https://tunneler/cb"},
+		"redirect_uri":          {"http://localhost:20314/auth/callback"},
 		"response_type":         {"code"},
 		"state":                 {"fb-state"},
 		"code_challenge":        {challenge},
@@ -433,8 +434,9 @@ func TestIntegrationFallbackFlow(t *testing.T) {
 	sessionState := upstreamRedirect.Query().Get("state")
 
 	// Simulate upstream callback.
+	req := browserRequest(w, "/callback?code=upstream-code&state="+sessionState)
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/callback?code=upstream-code&state="+sessionState, nil))
+	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -445,7 +447,7 @@ func TestIntegrationFallbackFlow(t *testing.T) {
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
@@ -545,7 +547,7 @@ func enrollAcross(t *testing.T, start, callback, token http.Handler) string {
 	t.Helper()
 	verifier, challenge := generateTestPKCE(t)
 	authReq := "/authorize?" + url.Values{
-		"redirect_uri":          {"https://tunneler/cb"},
+		"redirect_uri":          {"http://localhost:20314/auth/callback"},
 		"response_type":         {"code"},
 		"state":                 {"tunneler-state"},
 		"code_challenge":        {challenge},
@@ -566,8 +568,9 @@ func enrollAcross(t *testing.T, start, callback, token http.Handler) string {
 		"code":  {"upstream-code"},
 		"state": {upstream.Query().Get("state")},
 	}.Encode()
+	req := browserRequest(w, callbackReq)
 	w = httptest.NewRecorder()
-	callback.ServeHTTP(w, httptest.NewRequest(http.MethodGet, callbackReq, nil))
+	callback.ServeHTTP(w, req)
 	if w.Code != http.StatusFound {
 		t.Fatalf("callback: status = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -579,10 +582,10 @@ func enrollAcross(t *testing.T, start, callback, token http.Handler) string {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {tunneler.Query().Get("code")},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req = httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w = httptest.NewRecorder()
 	token.ServeHTTP(w, req)

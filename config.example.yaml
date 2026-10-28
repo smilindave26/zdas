@@ -95,3 +95,12 @@ session:
 # rate_limit:
 #   authorize_per_second: 10
 #   authorize_burst: 20
+
+# Where /authorize may send the browser back with a code. Unset (the
+# default) accepts only loopback callbacks - http(s) to localhost or a
+# loopback IP, any port - which is all tunnelers use. When set, it replaces
+# that default: entries are URLs matched on scheme, host and port (and path,
+# if given), and a loopback entry without a port matches any port.
+# allowed_redirect_uris:
+#   - "http://localhost"
+#   - "https://app.example.com/enroll/callback"

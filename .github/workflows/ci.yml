@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly, so newly published vulnerabilities surface without a push.
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -35,3 +38,18 @@ jobs:
             gofmt -l .
             exit 1
           fi
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The latest patched toolchain, which release builds use, so standard
+      # library findings match the shipped binaries.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

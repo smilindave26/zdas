@@ -21,6 +21,7 @@ type AuthSession struct {
 	ClientType                  string      // from the client_type param; empty for unmodified tunnelers
 	ZDASCodeVerifier            string      // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName        string
+	BrowserBindingHash          string // hex SHA-256 of the binding cookie /authorize set; empty if /authorize did not create the session
 	CreatedAt                   time.Time
 }
 

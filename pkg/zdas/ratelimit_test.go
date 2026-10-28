@@ -46,7 +46,7 @@ func TestRateLimiterDisabledByDefault(t *testing.T) {
 	_, challenge := generateTestPKCE(t)
 
 	for i := 0; i < 50; i++ {
-		reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+		reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 			"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 		req := httptest.NewRequest(http.MethodGet, reqURL, nil)
 		req.RemoteAddr = "1.2.3.4:12345"
@@ -75,7 +75,7 @@ func TestRateLimiterEnabled(t *testing.T) {
 	mux := h.Mux()
 
 	_, challenge := generateTestPKCE(t)
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 
 	// First two requests should succeed (burst=2).
