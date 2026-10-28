@@ -1,9 +1,6 @@
 package zdas
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"net/http"
 	"net/url"
 )
@@ -17,11 +14,6 @@ func bindingCookieName(sessionID string) string {
 	return bindingCookiePrefix + sessionID[:8]
 }
 
-func bindingHash(nonce string) string {
-	sum := sha256.Sum256([]byte(nonce))
-	return hex.EncodeToString(sum[:])
-}
-
 // bindingCookieScope returns the cookie path and Secure flag for the
 // deployment at externalURL. The path is the URL's path, so the cookie
 // reaches /authorize and /callback under whatever prefix zdas is mounted at.
@@ -33,51 +25,59 @@ func bindingCookieScope(externalURL string) (path string, secure bool) {
 	return u.Path, u.Scheme == "https"
 }
 
-// startSession stores sess and sets a cookie holding a nonce whose hash is
-// kept in the session, so that only the browser that started the flow can
-// complete it at /callback. It returns the session ID.
+// sessionKey returns the store key for session id. A session /authorize
+// creates is stored under its ID and the nonce in the browser's binding
+// cookie together, so a /callback without that cookie misses and leaves the
+// session for the browser that has it. nonce is empty for a session stored
+// under its bare ID, such as one an embedder put in a SessionStore directly.
+func (h *Handlers) sessionKey(id, nonce string) string {
+	if nonce != "" {
+		id += "." + nonce
+	}
+	return h.storeKey(kindSession, id)
+}
+
+// startSession stores sess bound to a new nonce and sets a cookie holding
+// the nonce, so that only the browser that started the flow can complete or
+// cancel it at /callback. It returns the session ID.
 func (h *Handlers) startSession(w http.ResponseWriter, r *http.Request, sess *AuthSession) (string, error) {
 	nonce, err := randomID()
 	if err != nil {
 		return "", err
 	}
-	sess.BrowserBindingHash = bindingHash(nonce)
-	id, err := h.createSession(r.Context(), sess)
+	id, err := h.createSession(r.Context(), sess, nonce)
 	if err != nil {
 		return "", err
 	}
+	h.setBindingCookie(w, id, nonce, int(h.cfg.Session.Timeout.Seconds()))
+	return id, nil
+}
+
+// consumeBoundSession consumes the session named by state, looked up with
+// the binding cookie r carries, and expires that cookie. It returns
+// (nil, nil) on a miss, including for a browser without the right cookie.
+func (h *Handlers) consumeBoundSession(w http.ResponseWriter, r *http.Request, state string) (*AuthSession, error) {
+	if !validID(state) {
+		return nil, nil
+	}
+	var nonce string
+	if c, err := r.Cookie(bindingCookieName(state)); err == nil {
+		h.setBindingCookie(w, state, "", -1)
+		if validID(c.Value) {
+			nonce = c.Value
+		}
+	}
+	return h.consumeSession(r.Context(), state, nonce)
+}
+
+func (h *Handlers) setBindingCookie(w http.ResponseWriter, id, nonce string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     bindingCookieName(id),
 		Value:    nonce,
 		Path:     h.cookiePath,
-		MaxAge:   int(h.cfg.Session.Timeout.Seconds()),
+		MaxAge:   maxAge,
 		Secure:   h.cookieSecure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return id, nil
-}
-
-// browserBound reports whether r carries the binding cookie for the session
-// consumed under id, and expires that cookie. A session with no binding
-// hash was not created by /authorize (an embedder may fill a SessionStore
-// directly), so there is no browser to check against.
-func (h *Handlers) browserBound(w http.ResponseWriter, r *http.Request, id string, sess *AuthSession) bool {
-	if sess.BrowserBindingHash == "" {
-		return true
-	}
-	name := bindingCookieName(id)
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Path:     h.cookiePath,
-		MaxAge:   -1,
-		Secure:   h.cookieSecure,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-	c, err := r.Cookie(name)
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(bindingHash(c.Value)), []byte(sess.BrowserBindingHash)) == 1
 }

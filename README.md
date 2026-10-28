@@ -98,6 +98,8 @@ Updated tunnelers send device info as query parameters on the authorize URL:
 - `hostname`, `os`, `arch`, `os_release`, `os_version` - optional, for richer identity names
 - `client_type` - optional free-form hint (`tunneler`, `host`, `service`) passed through to an embedding application's provisioner
 
+The IdP sign-in must finish in the browser the tunneler opened. ZDAS ties each enrollment to that browser with a cookie, so a sign-in completed anywhere else, such as another browser or a phone following an emailed magic link, is rejected at `/callback` with `400 session not found or expired`. The user has to start again from the tunneler. A callback from the wrong browser leaves the enrollment in place, so it can't be used to cancel someone else's.
+
 Unmodified tunnelers work without changes when `fallback.enabled` is true. They enroll with a temporary name (e.g., `jsmith-pending-a3f9b2`) that ZDAS reconciles to the real hostname after the tunneler connects.
 
 ## Embedding

@@ -309,6 +309,11 @@ func (h *Handlers) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, upstreamURL, http.StatusFound)
 }
 
+// sessionMissing is the /callback response when no session matches. A
+// browser other than the one that started the flow lands here too, since
+// it lacks the binding cookie the session is stored under.
+const sessionMissing = "session not found or expired; enrollment must finish in the browser that started it"
+
 func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	code := q.Get("code")
@@ -318,33 +323,28 @@ func (h *Handlers) handleCallback(w http.ResponseWriter, r *http.Request) {
 		desc := q.Get("error_description")
 		h.logger.Warn("upstream returned error", "error", errParam, "description", desc)
 		// We need the session to know the tunneler's redirect_uri.
-		sess, err := h.consumeSession(r.Context(), sessionState)
+		sess, err := h.consumeBoundSession(w, r, sessionState)
 		if err != nil {
 			h.logger.Error("consume session", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		if sess == nil {
-			http.Error(w, "session not found or expired", http.StatusBadRequest)
+			http.Error(w, sessionMissing, http.StatusBadRequest)
 			return
 		}
 		oidcErrorRedirect(w, r, sess.TunnelerRedirectURI, sess.TunnelerState, errParam, sanitizeErrorDescription(desc))
 		return
 	}
 
-	sess, err := h.consumeSession(r.Context(), sessionState)
+	sess, err := h.consumeBoundSession(w, r, sessionState)
 	if err != nil {
 		h.logger.Error("consume session", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if sess == nil {
-		http.Error(w, "session not found or expired", http.StatusBadRequest)
-		return
-	}
-	if !h.browserBound(w, r, sessionState, sess) {
-		h.logger.Warn("callback from a browser that did not start the session", "provider", sess.UpstreamProviderName)
-		http.Error(w, "enrollment must be completed in the browser that started it", http.StatusForbidden)
+		http.Error(w, sessionMissing, http.StatusBadRequest)
 		return
 	}
 
@@ -706,14 +706,14 @@ func (h *Handlers) storeKey(kind, id string) string {
 }
 
 // createSession stamps sess with the current time, stores it under a new
-// ID, and returns the ID.
-func (h *Handlers) createSession(ctx context.Context, sess *AuthSession) (string, error) {
+// ID bound to nonce (see sessionKey), and returns the ID.
+func (h *Handlers) createSession(ctx context.Context, sess *AuthSession, nonce string) (string, error) {
 	id, err := randomID()
 	if err != nil {
 		return "", err
 	}
 	sess.CreatedAt = time.Now()
-	if err := h.store.CreateSession(ctx, h.storeKey(kindSession, id), sess); err != nil {
+	if err := h.store.CreateSession(ctx, h.sessionKey(id, nonce), sess); err != nil {
 		return "", err
 	}
 	return id, nil
@@ -748,12 +748,12 @@ func (h *Handlers) createPendingProvision(ctx context.Context, pp *PendingProvis
 // consumeSession consumes an auth session and treats one that is no longer
 // fresh as a miss, so a Store without expiry logic of its own never hands
 // back an expired session. A malformed ID is a miss without a store lookup.
-// It returns (nil, nil) on a miss.
-func (h *Handlers) consumeSession(ctx context.Context, id string) (*AuthSession, error) {
+// It returns (nil, nil) on a miss. nonce is as for createSession.
+func (h *Handlers) consumeSession(ctx context.Context, id, nonce string) (*AuthSession, error) {
 	if !validID(id) {
 		return nil, nil
 	}
-	sess, err := h.store.ConsumeSession(ctx, h.storeKey(kindSession, id))
+	sess, err := h.store.ConsumeSession(ctx, h.sessionKey(id, nonce))
 	if err != nil || sess == nil || !h.fresh(kindSession, sess.CreatedAt, h.cfg.Session.Timeout) {
 		return nil, err
 	}

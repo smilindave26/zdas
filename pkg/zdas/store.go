@@ -20,7 +20,8 @@ import (
 // lowercase hex characters and fresh for every Create call. The derivation
 // also binds the entry's kind and the configured token issuer, so an entry
 // can only be consumed as the kind and by the ZDAS configuration that
-// created it.
+// created it, and, for an auth session, the nonce in the cookie that ties it
+// to the browser that started it.
 //
 // Consume methods return the entry for a key and remove it so that it cannot
 // be returned again, atomically: when several callers consume the same key

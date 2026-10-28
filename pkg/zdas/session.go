@@ -21,8 +21,12 @@ type AuthSession struct {
 	ClientType                  string      // from the client_type param; empty for unmodified tunnelers
 	ZDASCodeVerifier            string      // ZDAS's own PKCE verifier for upstream (empty for non-PKCE providers)
 	UpstreamProviderName        string
-	BrowserBindingHash          string // hex SHA-256 of the binding cookie /authorize set; empty if /authorize did not create the session
 	CreatedAt                   time.Time
+
+	// Deprecated: ZDAS no longer sets or reads this. The browser binding
+	// is part of the session's store key instead, so a callback from
+	// another browser cannot find, and so cannot use up, the session.
+	BrowserBindingHash string
 }
 
 // AuthCode holds composed claims alongside the metadata needed to validate the
