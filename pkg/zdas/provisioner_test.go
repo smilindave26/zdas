@@ -80,7 +80,7 @@ func TestProvisionerImmediateClaims(t *testing.T) {
 	// Create a session as if /authorize ran.
 	verifier, challenge := generateTestPKCE(t)
 	sessID, _ := store.CreateSession(&AuthSession{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
@@ -105,7 +105,7 @@ func TestProvisionerImmediateClaims(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
@@ -155,7 +155,7 @@ func TestProvisionerInteractiveRedirect(t *testing.T) {
 
 	verifier, challenge := generateTestPKCE(t)
 	sessID, _ := store.CreateSession(&AuthSession{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
@@ -207,7 +207,7 @@ func TestProvisionerInteractiveRedirect(t *testing.T) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {zdasCode},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {verifier},
 	}
 	req = httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
@@ -251,7 +251,7 @@ func runProvisionerCallback(t *testing.T, p EnrollmentProvisioner) *httptest.Res
 
 	_, challenge := generateTestPKCE(t)
 	sessID, _ := store.CreateSession(&AuthSession{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
@@ -403,7 +403,7 @@ func setupProvisionComplete(t *testing.T) (mux *http.ServeMux, pendingID string,
 	mux = h.Mux()
 
 	pendingID, err = store.CreatePendingProvision(&PendingProvision{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       "challenge",
 		TunnelerCodeChallengeMethod: "S256",
@@ -619,7 +619,7 @@ func TestProvisionerReceivesEnrollmentMethod(t *testing.T) {
 
 	_, challenge := generateTestPKCE(t)
 	sessID, _ := store.CreateSession(&AuthSession{
-		TunnelerRedirectURI:         "https://tunneler/cb",
+		TunnelerRedirectURI:         "http://localhost:20314/auth/callback",
 		TunnelerState:               "tstate",
 		TunnelerCodeChallenge:       challenge,
 		TunnelerCodeChallengeMethod: "S256",
@@ -709,7 +709,7 @@ func TestProvisionerReceivesClientType(t *testing.T) {
 			_, challenge := generateTestPKCE(t)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
-				"/authorize?redirect_uri=https://tunneler/cb&state=s1&device_name=box"+
+				"/authorize?redirect_uri=http://localhost:20314/auth/callback&state=s1&device_name=box"+
 					"&code_challenge="+challenge+"&code_challenge_method=S256"+tc.param, nil))
 			if w.Code != http.StatusFound {
 				t.Fatalf("authorize status = %d, body = %s", w.Code, w.Body.String())
@@ -718,10 +718,9 @@ func TestProvisionerReceivesClientType(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse Location: %v", err)
 			}
-			sessID := loc.Query().Get("state")
-
+			req := browserRequest(w, "/callback?code=c&state="+loc.Query().Get("state"))
 			w = httptest.NewRecorder()
-			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/callback?code=c&state="+sessID, nil))
+			mux.ServeHTTP(w, req)
 			if w.Code != http.StatusFound {
 				t.Fatalf("callback status = %d, body = %s", w.Code, w.Body.String())
 			}

@@ -155,7 +155,7 @@ func postToken(mux http.Handler, code string) *httptest.ResponseRecorder {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
-		"redirect_uri":  {"https://tunneler/cb"},
+		"redirect_uri":  {"http://localhost:20314/auth/callback"},
 		"code_verifier": {"unused"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
@@ -192,7 +192,7 @@ func TestStoreStaleEntriesAreMisses(t *testing.T) {
 			ctx := t.Context()
 
 			code := mustID(t)
-			if err := store.CreateCode(ctx, h.storeKey(kindCode, code), &AuthCode{RedirectURI: "https://tunneler/cb", CreatedAt: createdAt}); err != nil {
+			if err := store.CreateCode(ctx, h.storeKey(kindCode, code), &AuthCode{RedirectURI: "http://localhost:20314/auth/callback", CreatedAt: createdAt}); err != nil {
 				t.Fatal(err)
 			}
 			w := postToken(mux, code)
@@ -287,7 +287,7 @@ func TestStoreKeysAreHashedAndStamped(t *testing.T) {
 	mux := h.Mux()
 	_, challenge := generateTestPKCE(t)
 
-	reqURL := "/authorize?redirect_uri=https://tunneler/cb&response_type=code&state=s1" +
+	reqURL := "/authorize?redirect_uri=http://localhost:20314/auth/callback&response_type=code&state=s1" +
 		"&code_challenge=" + challenge + "&code_challenge_method=S256&device_name=laptop"
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, reqURL, nil))
@@ -322,7 +322,7 @@ func TestStoreEntriesBoundToIssuer(t *testing.T) {
 	a := setupStoreHandlers(t, store, "https://tenant-a.example.com")
 	b := setupStoreHandlers(t, store, "https://tenant-b.example.com")
 
-	code, err := a.createCode(t.Context(), &AuthCode{RedirectURI: "https://tunneler/cb"})
+	code, err := a.createCode(t.Context(), &AuthCode{RedirectURI: "http://localhost:20314/auth/callback"})
 	if err != nil {
 		t.Fatal(err)
 	}
