@@ -501,7 +501,7 @@ func withRecordingTokenExchange(t *testing.T, idTokenClaims map[string]interface
 	// For these tests we only care about the request params, not the
 	// verifier output, so have the stub return an error after recording.
 	orig := oidcTokenExchange
-	oidcTokenExchange = func(_ context.Context, _ string, params url.Values) (map[string]interface{}, error) {
+	oidcTokenExchange = func(_ context.Context, _ *http.Client, _ string, params url.Values) (map[string]interface{}, error) {
 		recorded = params
 		// Return an error so the test short-circuits after the recording.
 		// The test asserts on recorded params, not on the identity result.

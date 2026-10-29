@@ -129,6 +129,8 @@ handler, err := zdas.NewHandler(cfg, logger,
 
 `WithKeySet` documents how to rotate keys across replicas, and `zdastest.TestStore` is a conformance suite for your `Store` implementation.
 
+If someone you do not fully trust chooses the upstream issuers, such as a tenant admin in a multi-tenant service, pass `zdas.WithUpstreamHTTPClient(client)` so that discovery, signing keys, token exchanges and userinfo all go through a client you control, for example one whose dialer refuses internal addresses. `OIDCProviderConfig.HTTPClient` does the same for a provider used on its own. A refused token exchange is a `*zdas.TokenError`, whose `StatusCode` can be shown without the reply.
+
 Or use the provider layer on its own to federate login to an upstream IdP without the enrollment handlers:
 
 ```go

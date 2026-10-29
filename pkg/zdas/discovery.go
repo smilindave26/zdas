@@ -22,7 +22,8 @@ type Discovery struct {
 	cfg             ControllerConfig
 	registry        *ProviderRegistry
 	configuredNames map[string]struct{}
-	client          *http.Client
+	client          *http.Client // reaches the controller
+	upstreamClient  *http.Client // reaches discovered issuers; nil uses the defaults
 	logger          *slog.Logger
 
 	mu                sync.Mutex
@@ -174,11 +175,12 @@ func (d *Discovery) poll(ctx context.Context) error {
 			continue
 		}
 		p, err := NewOIDCProvider(ctx, OIDCProviderConfig{
-			Name:     s.Name,
-			Issuer:   s.Issuer,
-			ClientID: s.ClientID,
-			AuthURL:  s.ExternalAuthURL,
-			Logger:   d.logger,
+			Name:       s.Name,
+			Issuer:     s.Issuer,
+			ClientID:   s.ClientID,
+			AuthURL:    s.ExternalAuthURL,
+			HTTPClient: d.upstreamClient,
+			Logger:     d.logger,
 		})
 		if err != nil {
 			d.logger.Warn("failed to create oidc provider from signer, skipping", "name", s.Name, "error", err)
