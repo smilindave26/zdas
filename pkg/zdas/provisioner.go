@@ -3,6 +3,7 @@ package zdas
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 )
 
@@ -104,10 +105,11 @@ type Option func(*serverOptions)
 
 type serverOptions struct {
 	provisioner EnrollmentProvisioner
-	keys        *KeySet   // nil generates a key at startup
-	verifyKeys  []*KeySet // published in the JWKS alongside keys
-	store       Store     // nil uses an in-memory SessionStore
-	err         error     // misuse of an option, reported by NewServer
+	keys        *KeySet      // nil generates a key at startup
+	verifyKeys  []*KeySet    // published in the JWKS alongside keys
+	store       Store        // nil uses an in-memory SessionStore
+	upstream    *http.Client // nil uses each provider's default clients
+	err         error        // misuse of an option, reported by NewServer
 }
 
 // WithProvisioner sets an EnrollmentProvisioner hook. When set, ZDAS calls
@@ -144,6 +146,24 @@ func WithKeySet(active *KeySet, verifyOnly ...*KeySet) Option {
 		}
 		o.keys = active
 		o.verifyKeys = verifyOnly
+	}
+}
+
+// WithUpstreamHTTPClient makes every request ZDAS sends to an upstream
+// identity provider go through c: OIDC discovery, signing keys, token
+// exchanges and userinfo, for configured providers and those discovered from
+// the controller's signers, and GitHub's OAuth and API calls. Requests to the
+// Ziti controller do not use it. An embedder whose issuers are chosen by
+// someone it does not fully trust uses it to control where those requests
+// may go, e.g. with a dialer that refuses internal addresses. NewServer
+// fails if c is nil.
+func WithUpstreamHTTPClient(c *http.Client) Option {
+	return func(o *serverOptions) {
+		if c == nil {
+			o.err = errors.Join(o.err, errors.New("WithUpstreamHTTPClient: nil client"))
+			return
+		}
+		o.upstream = c
 	}
 }
 

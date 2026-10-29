@@ -255,6 +255,7 @@ func TestNewServerRejectsNilOptions(t *testing.T) {
 		"nil active":      WithKeySet(nil),
 		"nil verify-only": WithKeySet(ks, nil),
 		"nil store":       WithStore(nil),
+		"nil client":      WithUpstreamHTTPClient(nil),
 	} {
 		if srv, err := NewServer(cfg, slog.Default(), opt); err == nil {
 			srv.Shutdown(context.Background())

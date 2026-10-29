@@ -28,6 +28,7 @@ type GitHubProvider struct {
 	usernameField string
 	userIDField   string
 	allowedOrgs   []string
+	client        *http.Client
 
 	// Overridable for tests.
 	authBaseURL  string
@@ -44,6 +45,7 @@ func NewGitHubProvider(cfg ProviderConfig) *GitHubProvider {
 		usernameField: cfg.UsernameField,
 		userIDField:   cfg.UserIDField,
 		allowedOrgs:   cfg.AllowedOrgs,
+		client:        httpClient,
 		authBaseURL:   gitHubAuthURL,
 		tokenBaseURL:  gitHubTokenURL,
 		apiBaseURL:    gitHubUserURL,
@@ -109,7 +111,7 @@ func (p *GitHubProvider) exchangeCode(ctx context.Context, code, redirectURI str
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("github token request: %w", err)
 	}
@@ -145,7 +147,7 @@ func (p *GitHubProvider) fetchUser(ctx context.Context, accessToken string) (map
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("github user request: %w", err)
 	}
@@ -174,7 +176,7 @@ func (p *GitHubProvider) checkOrgs(ctx context.Context, accessToken string) erro
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("github orgs request: %w", err)
 	}
@@ -216,7 +218,7 @@ func (p *GitHubProvider) fetchPrimaryEmail(ctx context.Context, accessToken stri
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return ""
 	}

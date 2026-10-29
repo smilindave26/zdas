@@ -15,7 +15,9 @@
 // [WithStore] let several replicas behind a load balancer share signing
 // keys and in-flight enrollment state, with the per-replica exceptions
 // listed on WithStore; package zdastest provides a conformance suite for
-// [Store] implementations.
+// [Store] implementations. [WithUpstreamHTTPClient] sends every request to
+// upstream identity providers through the embedder's client, for an
+// embedder whose issuers are chosen by someone it does not fully trust.
 //
 // The provider layer alone: [NewOIDCProvider], [NewGitHubProvider],
 // [UpstreamProvider], [UpstreamIdentity], and [ProviderRegistry] can be

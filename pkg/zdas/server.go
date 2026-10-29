@@ -71,7 +71,11 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 		configuredNames[pc.Name] = struct{}{}
 		switch pc.Type {
 		case ProviderTypeGitHub:
-			if err := registry.Register(NewGitHubProvider(pc)); err != nil {
+			gh := NewGitHubProvider(pc)
+			if sopts.upstream != nil {
+				gh.client = sopts.upstream
+			}
+			if err := registry.Register(gh); err != nil {
 				return nil, fmt.Errorf("register provider %q: %w", pc.Name, err)
 			}
 			logger.Info("registered configured provider", "name", pc.Name, "type", pc.Type)
@@ -87,6 +91,7 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 				Scopes:          pc.Scopes,
 				FetchUserInfo:   pc.FetchUserInfo,
 				RequireUserInfo: pc.RequireUserInfo,
+				HTTPClient:      sopts.upstream,
 				Logger:          logger,
 			})
 			cancel()
@@ -106,6 +111,7 @@ func NewServer(cfg Config, logger *slog.Logger, opts ...Option) (srv *Server, re
 	if err != nil {
 		return nil, fmt.Errorf("create discovery: %w", err)
 	}
+	disc.upstreamClient = sopts.upstream
 
 	var reconciler *Reconciler
 	if cfg.Fallback.Enabled && cfg.Controller.IdentityFile != "" {

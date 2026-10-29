@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -33,6 +34,7 @@ type OIDCProvider struct {
 	scopes          []string
 	fetchUserInfo   bool
 	requireUserInfo bool
+	client          *http.Client // makes the token exchange and userinfo requests
 	logger          *slog.Logger
 }
 
@@ -66,6 +68,15 @@ type OIDCProviderConfig struct {
 	// set.
 	RequireUserInfo bool
 
+	// HTTPClient, when set, makes every request to the issuer: discovery,
+	// the signing keys, the token exchange and userinfo. An embedder whose
+	// issuers are chosen by someone it does not fully trust uses it to
+	// control where those requests may go, e.g. with a dialer that refuses
+	// internal addresses. nil keeps the defaults: discovery and keys use
+	// the client in ctx (oidc.ClientContext) or http.DefaultClient, and the
+	// token exchange and userinfo use ZDAS's own client.
+	HTTPClient *http.Client
+
 	// Logger receives userinfo fetch warnings. nil uses slog.Default().
 	Logger *slog.Logger
 }
@@ -73,6 +84,13 @@ type OIDCProviderConfig struct {
 // NewOIDCProvider creates an OIDCProvider from the given config. It creates an
 // ID token verifier bound to the provider's OIDC discovery data.
 func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig) (*OIDCProvider, error) {
+	client := cfg.HTTPClient
+	if client != nil {
+		// go-oidc keeps the client it finds here for later key fetches.
+		ctx = oidc.ClientContext(ctx, client)
+	} else {
+		client = httpClient
+	}
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery for %q: %w", cfg.Issuer, err)
@@ -119,6 +137,7 @@ func NewOIDCProvider(ctx context.Context, cfg OIDCProviderConfig) (*OIDCProvider
 		scopes:          scopes,
 		fetchUserInfo:   fetchUserInfo,
 		requireUserInfo: cfg.RequireUserInfo,
+		client:          client,
 		logger:          logger,
 	}, nil
 }
@@ -187,7 +206,7 @@ func (p *OIDCProvider) exchangeAndIdentify(ctx context.Context, code, redirectUR
 		params.Set("code_verifier", codeVerifier)
 	}
 
-	tokenResp, err := oidcTokenExchange(ctx, p.tokenURL, params)
+	tokenResp, err := oidcTokenExchange(ctx, p.client, p.tokenURL, params)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange with %s: %w", p.name, err)
 	}
@@ -259,7 +278,7 @@ func (p *OIDCProvider) mergeUserInfo(ctx context.Context, accessToken, idTokenSu
 	if accessToken == "" {
 		return errors.New("no access_token in token response")
 	}
-	ctx = oidc.ClientContext(ctx, httpClient)
+	ctx = oidc.ClientContext(ctx, p.client)
 	info, err := p.provider.UserInfo(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken}))
 	if err != nil {
 		return err
